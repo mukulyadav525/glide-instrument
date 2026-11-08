@@ -1,5 +1,7 @@
 // GLIDE v5 headless end-to-end driver.
-// node run.js <scenario>   scenarios: full | withdraw | crash | educator | nocam | remote
+// node run.js <scenario>   scenarios: full | withdraw | crash | educator | nocam | remote | pair
+//   pair: an OFFLINE session (no admin device); the portal connects with the
+//   5-character code on the laptop's first screen and runs everything, setup included.
 //   remote: a second tab opens the educator portal; once it connects, the
 //   whole session is driven from the portal and the laptop shows the child view only.
 const puppeteer = require("puppeteer-core");
@@ -100,7 +102,7 @@ async function main() {
   const waitValid = async (ms = 20000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (await nextEnabled()) return true; await sleep(250); } return false; };
 
   let portal = null, remoteChecks = {};
-  async function openPortal() {
+  async function openPortal(code) {
     // A second window (own browser context), so both pages stay visible: a
     // background tab is throttled and frozen, which a real second device is not.
     const ctx = browser.createBrowserContext ? await browser.createBrowserContext() : await browser.createIncognitoBrowserContext();
@@ -109,7 +111,7 @@ async function main() {
     onDialog(portal);
     portal.on("pageerror", e => errors.push("portal pageerror: " + e.message));
     portal.on("console", m => { if (m.type() === "error") errors.push("portal console: " + m.text()); });
-    await portal.goto(BASE + "/educator.html?api=" + encodeURIComponent(BASE + "/api") + "&k=" + encodeURIComponent(KEYS.DEVICE_KEY) + "&code=" + sess.join_code, { waitUntil: "load" });
+    await portal.goto(BASE + "/educator.html?api=" + encodeURIComponent(BASE + "/api") + "&k=" + encodeURIComponent(KEYS.DEVICE_KEY) + "&code=" + code, { waitUntil: "load" });
     const t0 = Date.now();
     while (Date.now() - t0 < 40000) {
       const ok = await portal.evaluate(() => document.querySelector("#conn").textContent === "connected").catch(() => false);
@@ -126,9 +128,26 @@ async function main() {
 
   let steps = 0, seen = [];
   const H = {
-    connect: async () => { await page.type("input.codein", sess.join_code); await clickText("Join session"); await sleep(1500);
-      if (scenario === "remote") await openPortal(); },
-    mode: async () => { await clickText("Yes, can understand and decide"); },
+    connect: async () => {
+      if (scenario === "pair") {
+        await openPortal(await page.evaluate(() => REMOTE.pairCode()));
+        await clickText("Run offline on this laptop"); return;
+      }
+      await page.type("input.codein", sess.join_code); await clickText("Join session"); await sleep(1500);
+      if (scenario === "remote") await openPortal(sess.join_code); },
+    mode: async () => {
+      if (scenario === "pair") {   // offline: everything typed on the portal
+        await clickText("Child session"); await sleep(400);
+        const type = (ph, v) => pev((ph, v) => { const i = [...document.querySelectorAll("#panel input")].find(x => (x.placeholder || "").startsWith(ph)); i.value = v; i.dispatchEvent(new Event("input", { bubbles: true })); }, ph, v);
+        await type("e.g. C-07", "T-PAIR"); await sleep(300); await type("e.g. E-02", "E-01"); await sleep(300);
+        await clickText("Yes", "#panel .q", 0); await sleep(300);
+        await clickText("Yes, can understand and decide"); await sleep(300);
+        await type("e.g. GLIDE-GPF", "GPF-v3-test"); await sleep(300);
+        await pev(() => document.querySelectorAll("#panel .q").forEach(q => { if (/eye tracking|video recording/.test(q.textContent)) q.querySelector("button").click(); })); await sleep(600);
+        await pev(() => { const i = document.querySelector("#panel input[type=date]"); i.value = "2031-12-31"; i.dispatchEvent(new Event("input", { bubbles: true })); }); await sleep(500);
+        return;
+      }
+      await clickText("Yes, can understand and decide"); },
     ascertain: async () => { await clickText("ADHD"); await clickText("Combined"); await clickText("Formal diagnostic report"); await clickText("Yes, I have it to hand"); await clickText("Within 12 months"); },
     card_match: async () => { await clickText("The box matches the card exactly"); },
     assent: async () => { await clickText("Yes, they want to do it"); await clickText("Reads fairly fluently"); },
@@ -144,12 +163,9 @@ async function main() {
     gaze_check: async () => { await waitValid(20000); },
     distance: async () => { for (let i = 0; i < 3; i++) { await clickText("Start"); await sleep(2600); await clickText("Gone"); await sleep(300); } },
     calibrate: async () => {
-      if (scenario === "remote") {   // the dots record themselves
-        const on = await pev(() => [...document.querySelectorAll("#panel .opt.on")].some(b => /Automatic/.test(b.textContent)));
-        if (!on) await clickText("Automatic: record each dot by itself");
-        await waitValid(60000); return; }
+      if (portal) { await waitValid(60000); return; }   // automatic is the default: the dots record themselves
       for (let i = 0; i < 20 && !(await nextEnabled()); i++) { await sleep(500); await clickText("They are looking at the dot"); await sleep(1300); } },
-    validate: async () => { if (scenario === "remote") { await waitValid(30000); return; }
+    validate: async () => { if (portal) { await waitValid(30000); return; }
       for (let i = 0; i < 5; i++) { await clickText("They are looking at the dot"); await sleep(2000); } },
     gaze_read: async () => { await sleep(1500); await clickText("They have finished reading"); await clickText("Fine"); },
     apply: async () => { await clickText("The child is taking a break now"); await sleep(800); await clickText("Break over"); await sleep(1200);
@@ -168,7 +184,7 @@ async function main() {
     if (process.env.DEBUG) log("step", id);
     // SHOTS=1: screenshots of the child's screen and the portal at a few moments
     if (process.env.SHOTS && portal && /^(font_0|framing2|calibrate|gaze_read|dis_X2)$/.test(id) && !seen.slice(0, -1).includes(id)) {
-      if (id === "calibrate") { await clickText("Automatic: record each dot by itself"); await sleep(4200); }
+      if (id === "calibrate") await sleep(4200);
       else await sleep(1500);
       await page.screenshot({ path: process.env.OUT + "/shot_" + id + "_laptop.png" });
       await portal.screenshot({ path: process.env.OUT + "/shot_" + id + "_portal.png" });
@@ -190,7 +206,7 @@ async function main() {
     }
     if (/^dis_/.test(id)) { await clickText("Fine"); await clickText("Kept reading the words"); }
     else if (/^recall_/.test(id)) { await pev(() => document.querySelectorAll("#panel .q").forEach(q => { const b = q.querySelector(".scale button"); if (b) b.click(); })); await sleep(150); }
-    else if (/^drift_/.test(id)) { await clickText("They are looking at the dot"); await sleep(1900); }
+    else if (/^drift_/.test(id)) { if (portal) await waitValid(8000); else { await clickText("They are looking at the dot"); await sleep(1900); } }
     else if (/^(font|size|colour|lead|track)_\d+$/.test(id)) { await key(Math.random() < 0.15 ? "3" : (Math.random() < 0.5 ? "1" : "2")); }
     else if (H[id]) await H[id]();
     if (process.env.STOP_AT === id) {

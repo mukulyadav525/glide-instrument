@@ -1,12 +1,12 @@
 # glide-instrument
 
-Glide Phase 1 research instrument, **v5.1.0** (schema 4.1.0). GitHub Pages serves it from the root of `main`.
+Glide Phase 1 research instrument, **v5.2.0** (schema 4.1.0). GitHub Pages serves it from the root of `main`.
 
 Three pages, usually on three devices:
 
 | Page | Address | Who uses it, where |
 |---|---|---|
-| **Participant screen** | https://mukulyadav525.github.io/glide-instrument/ | The student, at the participant laptop. With the educator portal connected it shows **only** what the child looks at: the two things to compare, the stories, the dots. |
+| **Participant screen** | https://mukulyadav525.github.io/glide-instrument/ | The student, at the participant laptop. Its first screen shows a 5-character code for the educator portal. Once the portal is connected it shows **only** what the child looks at: the question, the two things to compare, the stories, the dots. |
 | **Educator portal** | https://mukulyadav525.github.io/glide-instrument/educator.html | The special educator, on a phone, tablet or second laptop beside the student. It shows the live camera with the framing oval, every question and button, and calibration feedback. |
 | **Admin console** | https://mukulyadav525.github.io/glide-instrument/admin.html | The researcher (or the educator), on any device. Creates sessions, shows join codes and portal links, watches progress, sends Stop / Withdraw. |
 

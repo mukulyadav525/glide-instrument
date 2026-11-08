@@ -8,7 +8,7 @@ In v5.1 the special educator can open the **educator portal** on their own phone
 
 | Participant laptop (the child) | Educator portal (the educator) |
 |---|---|
-| Full screen: the two things to compare, the stories, the pages, the dots | The question, *Top one / Bottom one / The same*, Next, Back, Stop now |
+| Full screen: **the question in large text** and the two things to compare (never the answer buttons), the stories, the pages, the dots | The question, *Top one / Bottom one / The same*, Next, Back, Stop now |
 | The spoken prompts, as before | **Live camera** with the framing oval, the face box and the eyes drawn on it, plus what to adjust in words ("move to their left", "come a little closer") |
 | The red *Recording video* sign | The six framing checks, live, all session |
 | Optionally, a small camera picture (see below) | During calibration: a map of the laptop screen with the dot and the camera's current guess, and whether the eyes are clear enough to record |
@@ -17,11 +17,15 @@ Every answer is still recorded on the laptop, on the laptop's clock, exactly as 
 
 ## Using it
 
-1. **Admin console:** fill in *Set up a participant laptop* once (instrument address and device key). After that, every new session shows an **Educator portal** link, and each session card has a **Portal link** button that copies it.
-2. **Participant laptop:** join the session with the code, as usual. The connect screen tells you whether the portal is connected.
-3. **Educator's device:** open the portal link. It already contains the join code. It connects to the laptop by itself within about 10–15 seconds. The header turns to *connected*, and the laptop switches to the child-only view.
+**Quickest way (v5.2), works for every session, offline ones included:**
 
-You can also open `educator.html` directly and type the join code; the backend URL and device key are remembered once one portal link has been opened on that device.
+1. **Participant laptop:** open the instrument. Its first screen shows a large **5-character educator portal code**.
+2. **Educator's device:** open `educator.html` and type that code. It connects within about 5–15 seconds; the laptop switches to the child-only view.
+3. From then on, **everything** is done on the portal: typing the admin join code or choosing *Run offline*, the setup questions, consent, every answer, Next, Stop.
+
+The portal needs the backend URL and device key once per device. Opening any portal link from the admin console stores them (the admin console shows one with each new session and on each session card, once *Set up a participant laptop* is filled in). A portal link with a join code also works: it waits until the laptop has joined that session, then connects.
+
+The laptop must have been set up once with the admin console's setup link; otherwise its first screen says so instead of showing a code.
 
 **Keyboard on the portal:** `1`, `2`, `3` answer the comparison, the space bar records a calibration dot, and `→` / `←` move Next / Back, all as on the laptop.
 
@@ -54,7 +58,7 @@ Other changes:
 | Dots inside the left 62% of the screen, beside the educator panel | Dots on the **whole screen**. With the portal, the laptop is the child's screen anyway. Without it, the panel hides while dots remain, and a quiet line at the bottom says *press SPACE when the child is looking*. **Esc** shows the controls. |
 | 5 training samples per dot, taken blindly, including mid-blink | Up to 8 samples per dot, each taken only when the face model sees the face, **both eyes open** and the head roughly straight. A dot with fewer than 4 clean samples does not count: the educator is told why ("eyes closed or blinking", "head turned away"), and the dot appears again. |
 | All 9 dots required | At least 7 of 9. A dot that will not work can be skipped. |
-| Educator presses for every dot | Optional **Automatic** mode: each dot records itself once the child has looked for about a second and the eyes are clear. The educator watches the portal map and can still press sooner. |
+| Educator presses for every dot | **Automatic by default (v5.2)**: each dot (calibration, validation and drift) records itself once the child has looked for about a second and the eyes are clear. The educator watches the portal map and can press sooner, or switch to **Manually**. |
 | Validation measured the first 1.2 s after the button, including the eyes landing and the tracker catching up | The first 350 ms are dropped (lag, not inaccuracy), then 1.5 s is measured. The same applies to drift checks. |
 | A failed validation reset the model | **Add more calibration dots** keeps what was learned and adds nine more: usually better. **Start from scratch** is for when the setup changed (seat, screen angle, lights). Either counts as one of the two allowed recalibrations. |
 | Educator could not see whether the child was looking | The portal shows the live face with the eyes marked, and a map of the laptop screen with the dot (blue) and the camera's current guess (orange). |

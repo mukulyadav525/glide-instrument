@@ -64,19 +64,23 @@ class Store:
             for row in self.state["registry"].values(): w.writerow(row)
 
     # ---- ops (same names and shapes as Code.gs)
-    def op_ping(self, r, role): return {"role": role, "version": "glide-local-5.1.0"}
+    def op_ping(self, r, role): return {"role": role, "version": "glide-local-5.2.0"}
     # ---- v5.1: educator portal (same shapes as Code.gs)
     def op_edu_join(self, r, role):
         code = re.sub(r"[^A-Z0-9]", "", str(r.get("join_code") or "").upper())
         sid = self.state["join"].get(code)
         if not sid: raise ValueError("unknown_join_code")
         s = self.state["sessions"][sid]
-        keys = ["session_id","join_code","mode","child_id","educator_id","guardian_gaze","guardian_video","date","created_at","joined_at"]
+        keys = ["session_id","join_code","mode","child_id","educator_id","guardian_gaze","guardian_video","date","created_at","joined_at","pair_code"]
         return {"session": {k: s.get(k) for k in keys}, "status": self.state["status"].get(sid)}
     def op_signal(self, r, role):
-        sid = str(r.get("session_id") or "")
-        if not re.match(r"^s[a-z0-9]{6,30}$", sid): raise ValueError("bad_session_id")
-        if sid not in self.state["sessions"]: raise ValueError("unknown_session")
+        if r.get("pair"):
+            if not re.match(r"^[A-Z0-9]{5}$", str(r["pair"])): raise ValueError("bad_pair_code")
+            sid = "p_" + r["pair"]
+        else:
+            sid = str(r.get("session_id") or "")
+            if not re.match(r"^s[a-z0-9]{6,30}$", sid): raise ValueError("bad_session_id")
+            if sid not in self.state["sessions"]: raise ValueError("unknown_session")
         box = self.__dict__.setdefault("signals", {})
         if r.get("put"):
             if r.get("role") not in ("laptop", "educator"): raise ValueError("bad_role")
@@ -116,6 +120,7 @@ class Store:
         sid = self.state["join"].get(code)
         if not sid: raise ValueError("unknown_join_code")
         s = self.state["sessions"][sid]; s.setdefault("joined_at", now())
+        if re.match(r"^[A-Z0-9]{5}$", str(r.get("pair_code") or "")): s["pair_code"] = r["pair_code"]
         self.reg(sid, status="joined", last_seen=now())
         keys = ["session_id","join_code","mode","child_id","educator_id","capacity","guardian_main","guardian_gaze","guardian_video",
                 "consent_form_version","retention_until","sync_flash","date","created_at"]

@@ -26,7 +26,7 @@
    then refused unless it carries one of the two keys.
    ========================================================================= */
 
-var VERSION = "glide-backend-5.1.0";
+var VERSION = "glide-backend-5.2.0";
 var ROOT_NAME = "GLIDE_Study_Data";
 var REG_HEADERS = ["session_id","created_at","source","mode","child_id","educator_id","join_code","capacity",
   "consent_form_version","guardian_main","guardian_gaze","guardian_video","retention_until",
@@ -83,7 +83,7 @@ function doPost(e) {
       case "status":         out = { status: cacheGet_("st_" + req.session_id), commands: getCmds_(req.session_id) }; break;
       case "command":        out = addCmd_(req.session_id, req.type, req.args || {}); break;
       case "folder_url":     out = { url: root_().getUrl() }; break;
-      case "join":           out = join_(req.join_code); break;
+      case "join":           out = join_(req.join_code, req.pair_code); break;
       case "heartbeat":      out = heartbeat_(req.session_id, req.status || {}); break;
       case "ack":            out = ack_(req.session_id, req.command_id); break;
       case "upload":         out = upload_(req); break;
@@ -129,13 +129,15 @@ function createSession_(c) {
     return { session: s };
   } finally { lock.releaseLock(); }
 }
-function join_(code) {
+function join_(code, pairCode) {
   code = String(code || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
   var sid = PropertiesService.getScriptProperties().getProperty("join_" + code);
   if (!sid) throw new Error("unknown_join_code");
   var s = JSON.parse(PropertiesService.getScriptProperties().getProperty("sess_" + sid));
   if (s.joined_at && (Date.now() - Date.parse(s.joined_at)) > 12 * 3600 * 1000) throw new Error("join_code_expired");
   s.joined_at = s.joined_at || new Date().toISOString();
+  // v5.2: which laptop joined (its educator-portal pairing code), so a portal opened with the join code finds it
+  if (/^[A-Z0-9]{5}$/.test(String(pairCode || ""))) s.pair_code = String(pairCode);
   PropertiesService.getScriptProperties().setProperty("sess_" + sid, JSON.stringify(s));
   regUpsert_(sid, { status: "joined", last_seen: new Date().toISOString() });
   var pub = {}; ["session_id","join_code","mode","child_id","educator_id","capacity","guardian_main","guardian_gaze","guardian_video",
@@ -151,15 +153,22 @@ function eduJoin_(code) {
   if (!sid) throw new Error("unknown_join_code");
   var s = JSON.parse(PropertiesService.getScriptProperties().getProperty("sess_" + sid));
   if (s.joined_at && (Date.now() - Date.parse(s.joined_at)) > 12 * 3600 * 1000) throw new Error("join_code_expired");
-  var pub = {}; ["session_id","join_code","mode","child_id","educator_id","guardian_gaze","guardian_video","date","created_at","joined_at"].forEach(function (k) { pub[k] = s[k]; });
+  var pub = {}; ["session_id","join_code","mode","child_id","educator_id","guardian_gaze","guardian_video","date","created_at","joined_at","pair_code"].forEach(function (k) { pub[k] = s[k]; });
   return { session: pub, status: cacheGet_("st_" + sid) };
 }
-/* One mailbox per session and side ("laptop", "educator"), newest message
-   wins, kept 10 minutes. Messages are WebRTC offers/answers (a few kB). */
+/* One mailbox per laptop pairing code (v5.2; or, from v5.1 laptops, per
+   session) and side ("laptop", "educator"), newest message wins, kept 10
+   minutes. Messages are WebRTC offers/answers (a few kB) and "here"/"hello". */
 function signal_(req) {
-  var sid = String(req.session_id || "");
-  if (!/^s[a-z0-9]{6,30}$/.test(sid)) throw new Error("bad_session_id");
-  if (!PropertiesService.getScriptProperties().getProperty("sess_" + sid)) throw new Error("unknown_session");
+  var sid;
+  if (req.pair) {
+    if (!/^[A-Z0-9]{5}$/.test(String(req.pair))) throw new Error("bad_pair_code");
+    sid = "p_" + req.pair;
+  } else {
+    sid = String(req.session_id || "");
+    if (!/^s[a-z0-9]{6,30}$/.test(sid)) throw new Error("bad_session_id");
+    if (!PropertiesService.getScriptProperties().getProperty("sess_" + sid)) throw new Error("unknown_session");
+  }
   var c = CacheService.getScriptCache();
   if (req.put) {
     if (req.role !== "laptop" && req.role !== "educator") throw new Error("bad_role");

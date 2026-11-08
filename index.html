@@ -231,6 +231,12 @@ body.focus:not(.remote) #focushint{display:flex}
 #pip video,#pip canvas{position:absolute;inset:0;width:100%;height:100%}
 #pip video{object-fit:cover;transform:scaleX(-1)}
 #pvbtn{font-size:12px;padding:7px 10px}
+/* v5.2: the question, on the child's own screen (never the answer buttons) */
+.kidq{width:100%;max-width:860px;font-size:28px;font-weight:600;line-height:1.3;color:var(--ink);text-align:center;padding:6px 8px 4px}
+/* with the portal connected, educator-only notes leave the child's screen */
+body.remote #stage .note{display:none}
+.paircode{border:2px solid var(--accent);background:#EFF5F8;padding:14px 16px;margin:12px 0;text-align:center}
+.paircode .big-code{font-size:46px;color:var(--accent);margin:4px 0}
 
 /* screen-reader-only live region */
 .sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
@@ -265,9 +271,9 @@ body.focus:not(.remote) #focushint{display:flex}
 /* ===========================================================================
    GLIDE, preference-elicitation instrument for students aged 12 and above
    Two paired sessions: CHILD (perceptual choices) + EDUCATOR (everything else)
-   Instrument glide-p1-child-v5.1.0 · Schema 4.1.0
+   Instrument glide-p1-child-v5.2.0 · Schema 4.1.0
    ========================================================================= */
-const INSTRUMENT_VERSION = "glide-p1-child-v5.1.0";
+const INSTRUMENT_VERSION = "glide-p1-child-v5.2.0";
 const SCHEMA_VERSION = "4.1.0";
 
 /* =========================================================================
@@ -15537,7 +15543,9 @@ const LINK = (function () {
     call,
     ping() { return call("ping", {}, 12000); },
     async join(code) {
-      const j = await call("join", { join_code: String(code || "").trim().toUpperCase() }, 20000);
+      let pair = null; try { pair = REMOTE.pairCode(); } catch (e) {}
+      // v5.2: the laptop's pairing code goes with the join, so a portal opened from the admin console finds this laptop.
+      const j = await call("join", { join_code: String(code || "").trim().toUpperCase(), pair_code: pair }, 20000);
       session = j.session;
       return session;
     },
@@ -16954,15 +16962,22 @@ function applyJoined(cfg) {
 }
 add({ id:"connect", block:"admin", bar:"off",
   enter: () => { if (LINK.configured() && LINK.online() === null) LINK.ping().then(() => paint(), () => paint()); OUTBOX.refresh().then(() => paint()); },
-  stageFn: () => stage(card(el("div", {}, [
+  stageFn: () => {
+    let code = null, open = false; try { code = REMOTE.pairCode(); open = REMOTE.isOpen(); } catch (e) {}
+    const pairBox = !LINK.configured() ? el("div", { class:"notice", text:"This laptop is not linked to the study backend yet, so the educator portal cannot connect. Open the setup link from the admin console once on this laptop." })
+      : open ? el("div", { class:"notice ok", html:"<strong>Educator portal connected.</strong> Everything is answered on the portal from here on." })
+      : el("div", { class:"paircode" }, [el("div", { class:"eyebrow", text:"Educator portal code" }), el("div", { class:"big-code", text: code || "-----" }),
+          el("p", { class:"hint", text:"On the educator's phone, tablet or laptop, open the educator portal (educator.html) and type this code. The questions and buttons then appear there, and this screen shows only what the child sees." })]);
+    stage(card(el("div", {}, [
     el("div", { class:"eyebrow", text:"Glide · participant laptop" }),
     el("h1", { text:"Reading comfort study" }),
+    pairBox,
     el("p", { class:"lede", text:"This laptop is the one the student sits at. The session is normally started from the admin device, which gives you a short join code." }),
     el("table", { class:"t", html:
       "<tbody><tr><th>With the admin device</th><td>Type the join code shown on the admin screen. The child code, educator code and consent answers come from there.</td></tr>" +
       "<tr><th>Without it</th><td>Run offline. Everything is saved on this laptop and uploaded to the study Drive the next time this page is open with a connection.</td></tr>" +
       "<tr><th>Training</th><td>Run offline and choose Educator training on the next screen. Nothing is saved.</td></tr></tbody>" })
-  ]))),
+  ]))); },
   panel: () => {
     const w = el("div", { class:"wrap" });
     w.appendChild(el("div", { class:"eyebrow", text:"Start" }));
@@ -16970,10 +16985,10 @@ add({ id:"connect", block:"admin", bar:"off",
     if (S.link.joined) {
       const c = S.link.admin_session;
       w.appendChild(el("div", { class:"notice ok", html:"<strong>Joined.</strong> " + c.mode + " session for child <strong>" + (c.child_id || "-") + "</strong>, educator " + (c.educator_id || "-") + ". Press Next." }));
-      let portal = false; try { portal = REMOTE.isOpen(); } catch (e) {}
+      let portal = false, pc = ""; try { portal = REMOTE.isOpen(); pc = REMOTE.pairCode(); } catch (e) {}
       w.appendChild(el("div", { class: "notice" + (portal ? " ok" : ""), html: portal
         ? "<strong>Educator portal connected.</strong> From now on this laptop shows only what the child sees; the questions and buttons are on the portal."
-        : "<strong>Educator portal (optional):</strong> open the portal link from the admin console on the educator's phone, tablet or laptop and enter join code <strong>" + c.join_code + "</strong>. It connects by itself. Without it, the controls stay on this laptop." }));
+        : "<strong>Educator portal:</strong> open the portal link from the admin console, or open educator.html and type the laptop code <strong>" + pc + "</strong>. Without it, the controls stay on this laptop." }));
       return w;
     }
     if (!LINK.configured()) {
@@ -17794,7 +17809,7 @@ add({ id:"context", block:"ED_context", bar:"off",
 /* ============================ CHILD: PAIRWISE ============================ */
 function pairBlock(cfg) {
   cfg.pairs.forEach((_, n) => {
-    add({ id:cfg.id + "_" + n, block:cfg.block,
+    add({ id:cfg.id + "_" + n, block:cfg.block, ask: cfg.question,
       skipIf: () => !isChild() || (cfg.pairOk && !cfg.pairOk(cfg.pairs[n])),
       enter: () => { if (!ORDER[cfg.id]) ORDER[cfg.id] = cfg.pairs; say(cfg.prompt); },
       stageFn: () => {
@@ -17848,7 +17863,7 @@ function pairBlock(cfg) {
 }
 
 /* ===================== CHILD: PRACTICE / COMPREHENSION ==================== */
-add({ id:"comprehension", block:"C_practice", skipIf: () => !isChild(),
+add({ id:"comprehension", block:"C_practice", ask:"Which one is easier to see?", skipIf: () => !isChild(),
   enter: () => say("Let us practise. Here are two. One is big and easy to see. One is very small. Point to the one that is easier to see."),
   stageFn: () => stage([
       card(specimen({ sizePx:34 }, "The dog ran."), "1", { sizePx:34 }),
@@ -18121,12 +18136,14 @@ const calComplete = c => !!(c && c.i >= CAL_PTS.length && c.done >= CAL_MIN_POIN
    CAL_AUTO_DWELL_MS and the face is usable. The educator still watches (on
    the portal's video, or beside the child) and can press the button sooner. */
 let CAL_AUTO_T = null;
+/* v5.2: automatic is the default; the educator can switch to manual. */
+const calAuto = () => S._calAuto !== false;
 function autoArm(fn, key) {
   clearTimeout(CAL_AUTO_T);
-  if (!S._calAuto) return;
+  if (!calAuto()) return;
   const t0 = performance.now();
   const tryIt = () => {
-    if (!S._calAuto || CUR_SCREEN.id !== key.screen || key.still() === false) return;
+    if (!calAuto() || CUR_SCREEN.id !== key.screen || key.still() === false) return;
     if (FACEQ.usableNow().ok) { fn("auto"); return; }
     if (performance.now() - t0 < 8000) CAL_AUTO_T = setTimeout(tryIt, 250);
   };
@@ -18145,8 +18162,13 @@ setInterval(() => {
   if (n.textContent !== t) { n.textContent = t; n.className = "notice " + (u.ok ? "ok" : "bad"); }
 }, 300);
 function autoToggle() {
-  return el("button", { class: "opt" + (S._calAuto ? " on" : ""), onclick: () => { S._calAuto = !S._calAuto; log("gaze", "calibration_auto_mode", S._calAuto); paint(); } },
-    [el("span", { text: "Automatic: record each dot by itself" }), el("span", { class: "sub", text: "After the child has looked at it for about a second and the camera sees both eyes. You still watch, and can press the button sooner." })]);
+  const set = v => { if (calAuto() === v) return; S._calAuto = v; log("gaze", "calibration_auto_mode", v); paint(); };
+  const w = el("div", { class: "q" }, [el("div", { class: "q-t", text: "How are the dots recorded?" })]);
+  w.appendChild(el("button", { class: "opt" + (calAuto() ? " on" : ""), onclick: () => set(true) },
+    [el("span", { text: "Automatically (recommended)" }), el("span", { class: "sub", text: "Each dot records itself once the child has looked at it for about a second and the camera sees both eyes. You only watch; press the button to record sooner." })]));
+  w.appendChild(el("button", { class: "opt" + (!calAuto() ? " on" : ""), onclick: () => set(false) },
+    [el("span", { text: "Manually" }), el("span", { class: "sub", text: "Nothing records until you press “They are looking at the dot” (or the space bar)." })]));
+  return w;
 }
 add({ id:"calibrate", block:"gaze", bar:"off", skipIf: () => !gazeOn(),
   focus: () => !!(S._calib && S._calib.i < CAL_PTS.length),
@@ -18170,13 +18192,13 @@ add({ id:"calibrate", block:"gaze", bar:"off", skipIf: () => !gazeOn(),
           GAZE.start("calibration");
           requestAnimationFrame(() => dot.classList.add("shrunk"));
           const order = c.i;
-          c.armedFor = S._calAuto ? order : null;
+          c.armedFor = calAuto() ? order : null;
           autoArm(calRecord, { screen: "calibrate", still: () => S._calib === c && c.i === order && !c.busy });
         });
       } else {
         dot.classList.add("shrunk");
         // automatic mode switched on while this dot was already showing
-        if (S._calAuto && c.armedFor !== c.i && !c.busy) { const order = c.i; c.armedFor = order;
+        if (calAuto() && c.armedFor !== c.i && !c.busy) { const order = c.i; c.armedFor = order;
           autoArm(calRecord, { screen: "calibrate", still: () => S._calib === c && c.i === order && !c.busy }); }
       }
     }
@@ -18187,7 +18209,9 @@ add({ id:"calibrate", block:"gaze", bar:"off", skipIf: () => !gazeOn(),
     const c = S._calib || { i:0, attempt:1, done:0, retries:{}, skipped:[] };
     w.appendChild(el("div", { class:"eyebrow", text:"Calibration · attempt " + c.attempt + " of " + (1 + PROTOCOL.max_recalibrations) + (c.keep_model ? " · adding to the earlier one" : "") }));
     w.appendChild(el("h1", { text:"Teach the camera" }));
-    w.appendChild(el("p", { class:"lede", text:"One dot at a time. When the child is looking straight at it, press the button (or the space bar). Ask them to keep looking until it moves: it takes about a second." }));
+    w.appendChild(el("p", { class:"lede", text: calAuto()
+      ? "One dot at a time. Ask the child to look at each dot and keep looking until it moves. Each dot records itself after about a second, once the camera sees both eyes. Watch the camera picture; press the button only to record sooner."
+      : "One dot at a time. When the child is looking straight at it, press the button (or the space bar). Ask them to keep looking until it moves: it takes about a second." }));
     if (c.i < CAL_PTS.length) {
       w.appendChild(el("button", { class:"btn", style:"width:100%", text: c.busy ? "Recording… keep looking" : "They are looking at the dot", onclick:() => calRecord("educator") }));
       KEYS.set({ " ": () => calRecord("educator") });
@@ -18219,7 +18243,7 @@ add({ id:"calibrate", block:"gaze", bar:"off", skipIf: () => !gazeOn(),
     log("gaze","calibration", GAZE.calibrated ? "complete" : "partial",
       { attempt: S._calib ? S._calib.attempt : null, points_done: S._calib ? S._calib.done : 0, points_total: 9,
         points_skipped: S._calib ? S._calib.skipped : null, retries: S._calib ? S._calib.retries : null, keep_model: S._calib ? S._calib.keep_model : null,
-        auto_mode: !!S._calAuto, order: S._calib ? S._calib.order : null, health: GAZE.health(), interocular_baseline: FACEQ.baseline() }); },
+        auto_mode: calAuto(), order: S._calib ? S._calib.order : null, health: GAZE.health(), interocular_baseline: FACEQ.baseline() }); },
   valid: () => calComplete(S._calib)
 });
 function calSkipPoint() {
@@ -18343,9 +18367,9 @@ add({ id:"validate", block:"gaze", bar:"off", skipIf: () => !(gazeOn() && GAZE.c
       S._val.onsetFor = S._val.i;
       requestAnimationFrame(rt => { S._val.onset = CLOCK.fromPerf(rt);
         EV.log("validation_target_onset", { attempt: S.calibration_attempts, index: S._val.i }, S._val.onset);
-        const v = S._val, i = v.i; v.armedFor = S._calAuto ? i : null;
+        const v = S._val, i = v.i; v.armedFor = calAuto() ? i : null;
         autoArm(measureValPoint, { screen: "validate", still: () => S._val === v && v.i === i && !v.busy }); });
-    } else if (S._val.i < VAL_PTS.length && S._calAuto && S._val.armedFor !== S._val.i && !S._val.busy) {
+    } else if (S._val.i < VAL_PTS.length && calAuto() && S._val.armedFor !== S._val.i && !S._val.busy) {
       const v = S._val, i = v.i; v.armedFor = i;
       autoArm(measureValPoint, { screen: "validate", still: () => S._val === v && v.i === i && !v.busy });
     }
@@ -18420,6 +18444,8 @@ function driftScreen(id, before) {
       host.appendChild(el("div", { class:"valdot", style:"left:50%;top:50%", "aria-hidden":"true" }));
       stage(host, "Quick check before " + before);
       if (!S._drift[id + "_onset"]) requestAnimationFrame(rt => { S._drift[id + "_onset"] = CLOCK.fromPerf(rt); EV.log("drift_target_onset", { check:id }, S._drift[id + "_onset"]); });
+      // automatic (default): measures itself once the eyes are clear; re-armed on "Measure again" and after a recalibration
+      if (!S._drift[id] && !S._drift.busy) autoArm(() => measureDrift(id), { screen: id, still: () => !S._drift[id] && !S._drift.busy });
     },
     panel: () => {
       const w = el("div", { class:"wrap" });
@@ -18853,7 +18879,7 @@ driftScreen("drift_dis", "the pages with distractions");
    next. Each screen records the actual separation so an analyst can tell which
    of the six contrasts the geometry supported. */
 DISTRACTORS.forEach((d, n) => {
-  add({ id:"dis_" + d.id, block:"F_distraction", bar:"off", skipIf: () => !isChild(),
+  add({ id:"dis_" + d.id, block:"F_distraction", bar:"off", ask:"How does this page feel?", skipIf: () => !isChild(),
     enter: () => { if (!ORDER.dis) ORDER.dis = shuffle(DISTRACTORS.map(x => x.id));
       say("Look at this page. How does it make you feel?");
       if (gazeOn() && GAZE.calibrated) GAZE.start(); },
@@ -18900,7 +18926,7 @@ DISTRACTORS.forEach((d, n) => {
 });
 
 /* ======================= CHILD: BUSY vs CALM PAGE ======================== */
-add({ id:"layout", block:"E_layout", bar:"off", skipIf: () => !isChild(),
+add({ id:"layout", block:"E_layout", bar:"off", ask:"Which page would you rather read?", skipIf: () => !isChild(),
   enter: () => { if (!ORDER.lay) ORDER.lay = RNG() < 0.5 ? ["busy","calm"] : ["calm","busy"]; say("Here are two pages. Which one would you rather read?"); },
   stageFn: () => {
     const cfgs = { busy:{ nav:true, topAd:true, midAd:true, side:true, bottomBar:true }, calm:{ subheads:true } };
@@ -18970,7 +18996,7 @@ Nothing told them how long it would stay shut.`;
    CLS signals from preference data, and without a text item there is no
    child-side signal for the text-complexity weight at all, leaving it resting
    entirely on one educator's allocation with nothing to check it against. */
-add({ id:"textlevel", block:"F_text",
+add({ id:"textlevel", block:"F_text", ask:"Which one is easier to understand?",
   skipIf: () => !isChild() || answers.reading_level === "pre",
   enter: () => { if (!ORDER.txt) ORDER.txt = RNG() < 0.5 ? ["dense","plain"] : ["plain","dense"];
     say("Here are two pieces of writing. They say the same thing. Which one is easier to understand?"); },
@@ -19025,7 +19051,7 @@ add({ id:"textlevel", block:"F_text",
 });
 
 /* ============================ CHILD: RETEST ============================== */
-add({ id:"retest", block:"M_reliability", skipIf: () => !isChild(),
+add({ id:"retest", block:"M_reliability", ask:"Which one do you want to read?", skipIf: () => !isChild(),
   enter: () => { if (!ORDER.re) { const f = P.fontId, other = FONTS.filter(x => x.id !== f && !FONTHEALTH.failed().includes(x.id));
       ORDER.re = shuffle([f, (other[Math.floor(RNG() * other.length)] || FONTS[0]).id]); }
     say("Last one. Which of these two do you want to read?"); },
@@ -19793,7 +19819,7 @@ function saveBackup() {
       // v5
       v5: { link: S.link, consent: S.consent, video: S.video, physical: S.physical, framing: S.framing, drift: S.drift,
         calibration_attempts: S.calibration_attempts, breaks: S.breaks, validations: S.validations || [],
-        preview: S.preview || null, remote: S.remote || null, cal_auto: !!S._calAuto,
+        preview: S.preview || null, remote: S.remote || null, cal_auto: calAuto(),
         started_at: S.started_at, session_time_origin_ms: CLOCK.origin, clock_epochs: CLOCK.epochs,
         segments: REC.segments, frame_index: FRAMES.current(), cam_setup: S._camSetup || null, started: !!S._started, bs: S._bs || null, drift_state: S._drift || null }
     }));
@@ -19822,7 +19848,7 @@ function restoreBackup(b) {
   GAZE.calibrated = !!(b.calib && b.calib.done >= 9);
   const v = b.v5 || {};
   ["link","consent","video","physical","framing","drift","breaks","validations","preview","remote"].forEach(k => { if (v[k] !== undefined && v[k] !== null) S[k] = v[k]; });
-  S._calAuto = !!v.cal_auto;
+  S._calAuto = v.cal_auto !== false;
   S.calibration_attempts = v.calibration_attempts || 0;
   if (v.started_at) S.started_at = v.started_at;
   if (v.session_time_origin_ms) CLOCK.resume(v.session_time_origin_ms, v.clock_epochs);
@@ -19912,6 +19938,11 @@ function paint() {
   try { setBar(s.bar === "off" ? "off" : "on"); } catch (e) {}
   try { if (s.stageFn) s.stageFn(); else stage(null); }
   catch (e) { console.warn(e); stage(el("div", { class:"notice bad", text:"This could not be displayed. Tell the researcher, then press Next." })); }
+  /* v5.2: the child sees the QUESTION on their own screen, never the answer
+     buttons: the educator answers on the child's behalf (portal, or the
+     panel/keys on the laptop). Same on every setup, so the stimulus layout
+     does not depend on whether a portal was used. */
+  if (s.ask && isChild()) $("#stage").insertBefore(el("div", { class:"kidq", text: typeof s.ask === "function" ? s.ask() : s.ask }), $("#stage").firstChild);
   const p = $("#panel"); p.innerHTML = "";
   const ikey = s.info || (s.id && INFO[s.id] ? s.id : (s.id ? s.id.split("_")[0] : null));
   const ib = ikey ? infoBar(ikey) : null;
@@ -20187,7 +20218,20 @@ const REMOTE = (function () {
   const ICE = [{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:stun1.l.google.com:19302" }];
   let pc = null, dc = null, pending = null, handledHello = null, pollT = null, started = false;
   let open = false, local = false, sendTrack = null, sender = null, obs = null, snapT = null, faceT = null, lastHtml = null;
-  let lostAt = null, connects = 0, actions = 0, startedAt = Date.now();
+  let lostAt = null, connects = 0, actions = 0, startedAt = Date.now(), hereAt = 0;
+  /* v5.2 · PAIRING CODE. Every laptop shows a 5-character code from its very
+     first screen. The educator types it into the portal (or opens the admin
+     console's portal link, which finds the laptop once it has joined the
+     session), so the portal can run the whole session, setup included, and
+     works for offline sessions too. The code stays the same across reloads. */
+  const PAIR_KEY = "glide_pair", ALPHA = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+  let pair = null;
+  try { pair = localStorage.getItem(PAIR_KEY); } catch (e) {}
+  if (!/^[A-Z0-9]{5}$/.test(pair || "")) {
+    pair = ""; const r = new Uint32Array(5); crypto.getRandomValues(r);
+    for (let i = 0; i < 5; i++) pair += ALPHA[r[i] % ALPHA.length];
+    try { localStorage.setItem(PAIR_KEY, pair); } catch (e) {}
+  }
 
   const isOpen = () => !!(dc && dc.readyState === "open");
   function controlling() { return open && !local; }
@@ -20205,9 +20249,13 @@ const REMOTE = (function () {
   /* ------------------------------------------------------------ signalling */
   async function poll() {
     pollT = null;
-    if (!S.link.joined || !LINK.configured()) return schedule(5000);
+    if (!LINK.configured()) return schedule(5000);
     try {
-      const j = await LINK.call("signal", { session_id: S.session_id, get: "educator" }, 10000);
+      // Say "this laptop is here" (so the portal can confirm the code), at most every 4 minutes, never over a pending offer.
+      if (!isOpen() && !(pending && !pending.answered) && Date.now() - hereAt > 240000) {
+        await LINK.call("signal", { pair, role: "laptop", put: { type: "here", id: "" } }, 10000); hereAt = Date.now();
+      }
+      const j = await LINK.call("signal", { pair, get: "educator" }, 10000);
       const m = j.msg;
       if (m && m.type === "hello" && m.id && m.id !== handledHello) { handledHello = m.id; await offer(m.id); }
       else if (m && m.type === "answer" && pending && m.id === pending.id && !pending.answered) {
@@ -20246,7 +20294,7 @@ const REMOTE = (function () {
       pc.addEventListener("icegatheringstatechange", () => { if (pc && pc.iceGatheringState === "complete") res(); });
       setTimeout(res, 3000);
     });
-    await LINK.call("signal", { session_id: S.session_id, role: "laptop", put: { type: "offer", id, sdp: pc.localDescription.sdp } }, 15000);
+    await LINK.call("signal", { pair, role: "laptop", put: { type: "offer", id, sdp: pc.localDescription.sdp } }, 15000);
     EV.log("educator_portal_offer", { id });
   }
   function wire(ch) {
@@ -20414,7 +20462,7 @@ const REMOTE = (function () {
 
   return {
     start() {
-      if (started || !S.link.joined || typeof RTCPeerConnection === "undefined") return;
+      if (started || !LINK.configured() || typeof RTCPeerConnection === "undefined") return;
       started = true; startedAt = Date.now();
       const panel = document.getElementById("panel"), foot = document.getElementById("foot");
       obs = new MutationObserver(queueSnap);
@@ -20422,9 +20470,10 @@ const REMOTE = (function () {
       obs.observe(foot, { subtree: true, childList: true, attributes: true, characterData: true });
       faceT = setInterval(() => { try { sendFace(); } catch (e) {} }, 125);
       schedule(200);
-      EV.log("educator_portal_listening", { session_id: S.session_id });
+      EV.log("educator_portal_listening", { pair });
     },
     controlling, isOpen, send,
+    pairCode: () => pair,
     afterPaint() { if (isOpen()) queueSnap(); applyBody(); },
     /* The "why we ask this" panel opens on the portal, not on the child's screen. */
     modal(html) { return controlling() && send({ t: "modal", html }); },
@@ -20432,6 +20481,7 @@ const REMOTE = (function () {
     summary() { return { connects, actions, connected_now: open, controls_on_laptop: local }; }
   };
 })();
+REMOTE.start();   // v5.2: listen for the educator portal from the first screen
 
 /* generated by tools/build.py from src/data_dictionary.json */
 const DATA_DICTIONARY = {"_about": "GLIDE instrument v5 data dictionary, schema 4.0.0. One row per column of every CSV a session exports. t_perf is always milliseconds since the session time origin (manifest.clock), continuous across a crash-and-resume; utc_ms = session_time_origin_ms + t_perf. Every file is keyed by session_id and child_id via its folder; responses.csv also carries them per row.", "columns": [["responses.csv", "child_id", "string", "", "Child code entered or received from the admin device. Never a name."], ["responses.csv", "educator_id", "string", "", "Educator code."], ["responses.csv", "session_id", "string", "", "Session identifier; also the Drive folder suffix."], ["responses.csv", "mode", "string", "", "child | educator."], ["responses.csv", "instrument_version", "string", "", "Build that produced the row, e.g. glide-p1-child-v5.0.0."], ["responses.csv", "block", "string", "", "Measurement block, e.g. C_typeface, F_distraction, gaze, camera, physical, consent, ED_weights."], ["responses.csv", "item", "string", "", "What was recorded, e.g. pairwise, child_feeling, framing_check, drift_check, item_skipped."], ["responses.csv", "value", "any", "", "The answer. Objects are JSON. For three-face ratings 0 = fine, 1 = a bit much, 2 = too much."], ["responses.csv", "labels", "json", "", "Human-readable labels for coded values where they exist."], ["responses.csv", "winner", "string", "", "Pairwise: the chosen item id (null on a tie)."], ["responses.csv", "loser", "string", "", "Pairwise: the item not chosen (null on a tie)."], ["responses.csv", "tie", "bool", "", "Pairwise: the child said they look the same."], ["responses.csv", "comparison", "string", "", "Pairwise dimension: font, size, colour, lead, track, textlevel."], ["responses.csv", "distractor_id", "string", "", "X1..X6, distractor shown on that screen."], ["responses.csv", "page", "string", "", "Layout screen: busy | calm."], ["responses.csv", "variant", "string", "", "Text screen: dense | plain."], ["responses.csv", "adaptation", "string", "", "Educator backlog item being rated."], ["responses.csv", "felt_load", "int", "0-2", "Three-face rating attached to a reading row."], ["responses.csv", "passage", "string", "", "R1 | R2, which reading passage."], ["responses.csv", "settings", "string", "", "default | own_choices for the two reads."], ["responses.csv", "gaze_usable", "bool", "", "At least 10 gaze samples were collected on that screen."], ["responses.csv", "gaze_samples", "int", "count", "Valid gaze samples on that screen."], ["responses.csv", "duration_ms", "int", "ms", "Gaze sampling duration on that screen."], ["responses.csv", "outside_share", "float", "0-1", "Share of gaze samples outside every zone."], ["responses.csv", "latency_ms", "int", "ms", "Time from screen entry to the moment the answer was logged."], ["responses.csv", "session_elapsed_ms", "int", "ms", "Time since the session start (setup screen left)."], ["responses.csv", "ts", "iso8601", "", "Wall-clock time of the log entry (human reading only; join on t_perf)."], ["responses.csv", "stimulus_hash", "string", "", "Hash of the session's live typography parameters at log time."], ["responses.csv", "t_perf", "float", "ms", "Shared clock time of the log entry. Join key to frames, gaze, events, video."], ["responses.csv", "frame_index", "int", "", "Most recent camera frame index (frames.csv) at log time; empty if no camera."], ["responses.csv", "screen_id", "string", "", "Screen id the response was given on."], ["pairs.csv", "child_id", "string", "", "Child code."], ["pairs.csv", "dimension", "string", "", "font | size | colour | lead | track | textlevel."], ["pairs.csv", "item_a", "string", "", "Item shown on top (position 1)."], ["pairs.csv", "item_b", "string", "", "Item shown at the bottom (position 2)."], ["pairs.csv", "winner", "string", "", "Chosen item, empty on a tie."], ["pairs.csv", "loser", "string", "", "Not-chosen item, empty on a tie."], ["pairs.csv", "tie", "bool", "", "They look the same to me."], ["pairs.csv", "winner_position", "string", "", "top | bottom, for modelling position bias."], ["pairs.csv", "latency_ms", "int", "ms", "Decision latency."], ["pairs.csv", "stimulus_hash_a", "string", "", "Hash of the rendered parameters of item_a."], ["pairs.csv", "stimulus_hash_b", "string", "", "Hash of the rendered parameters of item_b."], ["pairs.csv", "ts", "iso8601", "", "Wall-clock time."], ["pairs.csv", "t_perf", "float", "ms", "Shared clock time of the choice."], ["gaze_zones.csv", "child_id", "string", "", "Child code."], ["gaze_zones.csv", "screen", "string", "", "Logged item the zones belong to."], ["gaze_zones.csv", "block", "string", "", "Block of that screen."], ["gaze_zones.csv", "distractor_id", "string", "", "Distractor on that screen, if any."], ["gaze_zones.csv", "settings", "string", "", "default | own_choices for reading screens."], ["gaze_zones.csv", "passage", "string", "", "Passage id for reading screens."], ["gaze_zones.csv", "zone_id", "string", "", "text | distractor (whole regions only)."], ["gaze_zones.csv", "x", "int", "css px", "Zone left, viewport coordinates."], ["gaze_zones.csv", "y", "int", "css px", "Zone top."], ["gaze_zones.csv", "w", "int", "css px", "Zone width."], ["gaze_zones.csv", "h", "int", "css px", "Zone height."], ["gaze_zones.csv", "samples", "int", "count", "Valid samples inside the zone."], ["gaze_zones.csv", "share", "float", "0-1", "Share of the screen's samples inside the zone."], ["gaze_zones.csv", "dwell_ms", "int", "ms", "share x sampling duration."], ["gaze_zones.csv", "visits", "int", "count", "Separate entries into the zone (coarse excursions, not fixations)."], ["gaze_zones.csv", "first_entry_ms", "int", "ms", "Time from sampling start to the first sample in the zone."], ["gaze_zones.csv", "validation_error_px", "int", "css px", "This participant's measured accuracy."], ["gaze_zones.csv", "validation_error_deg", "float", "deg", "Same, in degrees (see manifest for pitch and distance method)."], ["gaze_zones.csv", "zone_separation_px", "int", "css px", "Smallest centre-to-centre distance between zones on that screen."], ["gaze_zones.csv", "separation_exceeds_error", "bool", "", "Zones further apart than the measured error."], ["gaze_zones.csv", "interpretable", "bool", "", "true only if the between-zone contrast is resolvable; empty = not applicable (single zone)."], ["events.csv", "t_perf", "float", "ms", "Shared clock time of the event (rAF time for onsets and flashes)."], ["events.csv", "type", "string", "", "screen_enter, screen_leave, stimulus_onset, response, sync_flash_on/off, recording_segment_start/stop, break_start/end, visibility, window_blur/focus, resize, scroll, calibration_target_onset/click/offset, validation_target_onset, drift_target_onset, gaze_sampling_start/stop, camera_*, recorder_*, upload_*, admin_command, hover_dwell, preview_shown/preview_hidden/preview_mode (camera picture on the child's screen, v5.1), educator_portal_* (portal connection and every portal action, v5.1), webgazer_mouse_training_off, calibration_target_skipped, and others."], ["events.csv", "screen_id", "string", "", "Screen on display when the event happened."], ["events.csv", "block", "string", "", "Block of that screen."], ["events.csv", "detail", "json", "", "Event-specific fields (e.g. stimulus_dom_hash and mean_rel_luminance on stimulus_onset)."], ["frames.csv", "frame_index", "int", "", "Running index of presented camera frames, from 1."], ["frames.csv", "t_perf", "float", "ms", "Shared clock time when the frame callback ran."], ["frames.csv", "media_time_s", "float", "s", "Frame's media time from requestVideoFrameCallback."], ["frames.csv", "capture_time_perf", "float", "ms", "Camera capture time on the shared clock, where the browser reports it."], ["frames.csv", "expected_display_time_perf", "float", "ms", "When the browser expected to display the frame, shared clock."], ["frames.csv", "presented_frames", "int", "", "Browser's presented-frame counter; gaps mean dropped frames."], ["frames.csv", "dropped_before", "int", "count", "Frames missing between this and the previous callback."], ["frames.csv", "segment", "int", "", "Video part number being recorded at that moment (empty if not recording)."], ["frames.csv", "width", "int", "px", "Frame width."], ["frames.csv", "height", "int", "px", "Frame height."], ["face_quality.csv", "t_perf", "float", "ms", "Shared clock time of the face-model result."], ["face_quality.csv", "frame_index", "int", "", "Latest camera frame index at that time."], ["face_quality.csv", "face_detected", "bool", "", "The face mesh found a face."], ["face_quality.csv", "box_x", "int", "model px", "Face box left, in the tracker image (img_w x img_h)."], ["face_quality.csv", "box_y", "int", "model px", "Face box top."], ["face_quality.csv", "box_w", "int", "model px", "Face box width."], ["face_quality.csv", "box_h", "int", "model px", "Face box height."], ["face_quality.csv", "img_w", "int", "px", "Width of the image the model ran on (may be smaller than the recorded video)."], ["face_quality.csv", "img_h", "int", "px", "Height of that image."], ["face_quality.csv", "landmark_confidence", "float", "", "Not reported by this face-mesh runtime; always empty, kept for schema stability."], ["face_quality.csv", "yaw_deg", "float", "deg", "Approximate head yaw from landmark depth (flagging only)."], ["face_quality.csv", "pitch_deg", "float", "deg", "Approximate head pitch."], ["face_quality.csv", "roll_deg", "float", "deg", "Head roll from the eye-corner line."], ["face_quality.csv", "ear_left", "float", "ratio", "Eye aspect ratio, left eye (vertical / horizontal opening)."], ["face_quality.csv", "ear_right", "float", "ratio", "Eye aspect ratio, right eye."], ["face_quality.csv", "eyes_closed", "bool", "", "Both EARs below the protocol threshold (manifest.protocol.ear_closed)."], ["face_quality.csv", "interocular_px", "float", "model px", "Distance between eye centres; a per-frame distance proxy."], ["face_quality.csv", "distance_ratio", "float", "ratio", "Interocular px at calibration / now. >1 means further from the screen than at calibration."], ["face_quality.csv", "face_brightness", "int", "0-255", "Mean luma inside the face box (every third row)."], ["face_quality.csv", "bg_brightness", "int", "0-255", "Mean luma outside the face box; much brighter than the face = backlit."], ["face_quality.csv", "screen_id", "string", "", "Screen on display."], ["gaze.csv", "t_perf", "float", "ms", "Shared clock time of the gaze callback."], ["gaze.csv", "x", "int", "css px", "Estimated gaze x, viewport coordinates. Empty when invalid."], ["gaze.csv", "y", "int", "css px", "Estimated gaze y."], ["gaze.csv", "valid", "bool", "", "false = the tracker produced no estimate for that callback (counts toward data loss)."], ["gaze.csv", "screen_id", "string", "", "Screen on display."], ["gaze.csv", "phase", "string", "", "calibration | validation | drift | the screen id of a measured screen."], ["gaze.csv", "calibration_attempt", "int", "", "Calibration attempt in effect."], ["gaze.csv", "validation_error_deg", "float", "deg", "Accuracy of the validation in effect at that time."], ["gaze.csv", "validation_meets_protocol", "bool", "", "That validation met the pre-declared thresholds."], ["calibration.csv", "attempt", "int", "", "Calibration attempt (1 = first; at most 1 + max_recalibrations)."], ["calibration.csv", "kind", "string", "", "calibration | calibration_retry | validation | drift. calibration_retry (v5.1): a dot where fewer than 4 clean training samples were obtained; the child was asked to look again and a later row for the same point_index is the counted one."], ["calibration.csv", "point_index", "int", "", "Index into the 3x3 grid (calibration) or the 5 validation points."], ["calibration.csv", "order", "int", "", "Position in the randomised presentation order."], ["calibration.csv", "target_x", "int", "css px", "Target centre, viewport coordinates."], ["calibration.csv", "target_y", "int", "css px", "Target centre."], ["calibration.csv", "onset_t_perf", "float", "ms", "Target first painted (rAF)."], ["calibration.csv", "click_t_perf", "float", "ms", "Educator pressed 'looking now' (or, in automatic mode, the dot recorded itself; samples_json.source says which)."], ["calibration.csv", "offset_t_perf", "float", "ms", "Target removed / measurement ended."], ["calibration.csv", "n_samples", "int", "count", "Valid gaze predictions during the dwell."], ["calibration.csv", "median_x", "int", "css px", "Median predicted x during the dwell."], ["calibration.csv", "median_y", "int", "css px", "Median predicted y."], ["calibration.csv", "error_px", "int", "css px", "Distance between median prediction and target."], ["calibration.csv", "error_deg", "float", "deg", "Same in degrees (validation and drift only)."], ["calibration.csv", "samples_json", "json", "", "Raw predictions [x, y, t_perf] during the dwell; for calibration rows also the t_perf of each training sample, trained (clean samples used), gated (false if the face model was unavailable and samples were not filtered), rejected_ticks (why samples were refused: no_face, eyes_closed, head_turned, no_recent_frame), source and keep_model. Validation and drift samples exclude the first 350 ms after the button. With the video, this is ground truth for offline re-calibration."], ["aoi.csv", "t_perf", "float", "ms", "When the boxes were measured."], ["aoi.csv", "screen_id", "string", "", "Screen."], ["aoi.csv", "reason", "string", "", "onset | resize | scroll."], ["aoi.csv", "aoi_id", "string", "", "Region name (card, main_text, ad, sidebar, popup, chat, bottom_bar, nav, opt_pair, ...); _n suffix for repeats."], ["aoi.csv", "selector", "string", "", "CSS selector the region was measured from."], ["aoi.csv", "x", "int", "css px", "Left, viewport coordinates (same frame as gaze)."], ["aoi.csv", "y", "int", "css px", "Top."], ["aoi.csv", "w", "int", "css px", "Width."], ["aoi.csv", "h", "int", "css px", "Height."], ["aoi.csv", "scroll_x", "int", "css px", "Stage scroll offset at measurement."], ["aoi.csv", "scroll_y", "int", "css px", "Panel scroll offset at measurement."], ["aoi.csv", "viewport_w", "int", "css px", "Viewport width."], ["aoi.csv", "viewport_h", "int", "css px", "Viewport height."], ["pointer.csv", "t_perf", "float", "ms", "Event time."], ["pointer.csv", "type", "string", "", "move (throttled to 20 Hz) | down | up."], ["pointer.csv", "x", "int", "css px", "Pointer x."], ["pointer.csv", "y", "int", "css px", "Pointer y."], ["pointer.csv", "buttons", "int", "", "Pressed-buttons bitmask."], ["pointer.csv", "pointer_type", "string", "", "mouse | touch | pen."], ["pointer.csv", "target", "string", "", "Coarse element under the pointer."], ["pointer.csv", "screen_id", "string", "", "Screen."], ["video_segments.csv", "segment", "int", "", "Part number; file video/part_NNN.webm."], ["video_segments.csv", "file", "string", "", "Path of the part inside the session folder."], ["video_segments.csv", "mime", "string", "", "Container and codec actually used."], ["video_segments.csv", "reason_start", "string", "", "consent | block_change:<block> | max_length | restart_after_error | resume_after_reload."], ["video_segments.csv", "reason_stop", "string", "", "Why the part ended (session_end, withdrawn, camera_lost, crash_salvaged, ...)."], ["video_segments.csv", "start_t_perf", "float", "ms", "Recorder start event; the part's media time 0 is at or just after this."], ["video_segments.csv", "first_chunk_t_perf", "float", "ms", "First 5-second chunk delivered."], ["video_segments.csv", "stop_t_perf", "float", "ms", "Recorder stop."], ["video_segments.csv", "first_frame_index", "int", "", "First frames.csv row recorded in this part."], ["video_segments.csv", "last_frame_index", "int", "", "Last frames.csv row recorded in this part."], ["video_segments.csv", "chunks", "int", "count", "Chunks written."], ["video_segments.csv", "bytes", "int", "bytes", "Part size."], ["video_segments.csv", "screen_at_start", "string", "", "Screen on display when the part began."], ["video_segments.csv", "block", "string", "", "Block when the part began."], ["data_dictionary.csv", "file", "string", "", "File the column belongs to."], ["data_dictionary.csv", "column", "string", "", "Column name."], ["data_dictionary.csv", "type", "string", "", "string | int | float | bool | json | iso8601 | any."], ["data_dictionary.csv", "unit", "string", "", "Unit where one applies."], ["data_dictionary.csv", "description", "string", "", "Meaning."]], "files": [["manifest.json", "Read first. File list with SHA-256 and row counts, versions, consent form version, retention date, clock, protocol thresholds, camera and codec."], ["session.json", "Complete record: every response, derived summaries (profile inputs, CLS weights, quality), environment, consent, physical calibration, video and face summaries."], ["session.partial.json", "Snapshot written every 5 minutes during the session; superseded by session.json."], ["profile.json", "The settings object the extension loads (child or educator half)."], ["stimuli.json", "Exact DOM of every distinct stimulus shown, keyed by stimulus_dom_hash (see events.csv stimulus_onset)."], ["video/part_NNN.webm", "Face video, no audio, one self-contained file per part (block boundaries or 2 minutes)."]]};

@@ -1,4 +1,4 @@
-# Glide instrument `glide-p1-child-v5.1.0` · deployment and operation
+# Glide instrument `glide-p1-child-v5.2.0` · deployment and operation
 
 v5 adds face video on the same clock as everything else, physical screen calibration, a stricter gaze calibration with pre-declared acceptance rules, passive behavioural streams, an **admin console on a second device**, and **upload to Google Drive**. Everything in v4.2 is still there and still works the same way.
 
@@ -38,7 +38,7 @@ Use **Chrome or Edge** (current version). Safari and Firefox cannot time individ
 
 1. **Admin:** *New session*. Fill in the child code, educator code, consent form version, which components the guardian form agrees to (study, eye tracking, video) and the retention date. Click **Create**. A 6-letter code appears.
 2. **Laptop:** type the code on the first screen and click **Join**. Codes and consent come from the admin device, so they cannot be mistyped here.
-3. **Educator's device (optional):** open the portal link shown with the new session. It connects to the laptop by itself; the laptop then shows only the child's view. **Ctrl + Shift + E** on the laptop brings the controls back there at any time.
+3. **Educator's device (recommended):** open `educator.html` and type the 5-character code shown on the laptop's first screen (or open the portal link shown with the new session). Once connected, everything, setup included, is done on the portal, and the laptop shows only the child's view. **Ctrl + Shift + E** on the laptop brings the controls back there at any time.
 4. The admin card shows the screen, minutes elapsed, recording state and fps, face visibility, gaze accuracy, and uploads.
 
 The special educator can be the admin too: create the session on a phone, then sit with the student.
@@ -65,7 +65,7 @@ Each screen skips itself when its consent or condition is absent. With no video 
 
 **Card match.** Hold any bank-card-sized card flat on the screen and drag until the striped box matches it. Do not change the browser zoom afterwards.
 
-**Calibration.** One dot at a time, in random order, on the whole screen. When the student is looking at it, press the button or the space bar (or switch on *Automatic*). A dot only counts when the camera sees both eyes open; otherwise you are told why and it appears again. At least 7 of 9 dots are needed. **Validation** then checks accuracy against the rule fixed before collection (≤ 5° accuracy, ≤ 30% data loss). If the rule is not met you get **at most two recalibrations**: *Add more calibration dots* (keeps what was learned; usually best) or *Start from scratch* (if the seat, screen or lights changed). After that eye tracking switches off and the video keeps recording. Without a portal the educator panel hides while dots are on screen; **Esc** shows it.
+**Calibration.** One dot at a time, in random order, on the whole screen. By default each dot records itself once the student has looked at it for about a second and the camera sees both eyes; switch to *Manually* to press the button or space bar for each dot yourself. A dot only counts when the camera sees both eyes open; otherwise you are told why and it appears again. At least 7 of 9 dots are needed. **Validation** then checks accuracy against the rule fixed before collection (≤ 5° accuracy, ≤ 30% data loss). If the rule is not met you get **at most two recalibrations**: *Add more calibration dots* (keeps what was learned; usually best) or *Start from scratch* (if the seat, screen or lights changed). After that eye tracking switches off and the video keeps recording. Without a portal the educator panel hides while dots are on screen; **Esc** shows it.
 
 **Drift checks.** One centre dot before each gaze block. If the drift is over 2.5°, recalibrate quickly or carry on; either choice is recorded.
 

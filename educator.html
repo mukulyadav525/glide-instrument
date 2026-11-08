@@ -234,6 +234,12 @@ body.focus:not(.remote) #focushint{display:flex}
 #pip video,#pip canvas{position:absolute;inset:0;width:100%;height:100%}
 #pip video{object-fit:cover;transform:scaleX(-1)}
 #pvbtn{font-size:12px;padding:7px 10px}
+/* v5.2: the question, on the child's own screen (never the answer buttons) */
+.kidq{width:100%;max-width:860px;font-size:28px;font-weight:600;line-height:1.3;color:var(--ink);text-align:center;padding:6px 8px 4px}
+/* with the portal connected, educator-only notes leave the child's screen */
+body.remote #stage .note{display:none}
+.paircode{border:2px solid var(--accent);background:#EFF5F8;padding:14px 16px;margin:12px 0;text-align:center}
+.paircode .big-code{font-size:46px;color:var(--accent);margin:4px 0}
 
 /* screen-reader-only live region */
 .sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
@@ -293,10 +299,10 @@ body{background:var(--bg)}
 
 <div id="setup" class="hide">
   <div class="card">
-    <div class="eyebrow">Educator portal · glide-p1-child-v5.1.0</div>
+    <div class="eyebrow">Educator portal · glide-p1-child-v5.2.0</div>
     <h1>Connect to the participant laptop</h1>
-    <p class="lede">Type the join code shown on the admin console (the same code the laptop uses). This device then shows the child's camera and all the questions; the laptop shows the child only the things to compare.</p>
-    <label class="fld"><span>Join code</span><input id="code" type="text" class="codein" maxlength="6" placeholder="CODE" autocomplete="off"></label>
+    <p class="lede">Type the <b>5-character code</b> shown on the participant laptop's first screen (or the 6-character join code from the admin console). This device then shows the child's camera and every question and button; the laptop shows the child only the questions and the things to compare.</p>
+    <label class="fld"><span>Laptop code or join code</span><input id="code" type="text" class="codein" maxlength="6" placeholder="CODE" autocomplete="off"></label>
     <details id="adv"><summary>Backend settings</summary>
       <label class="fld"><span>Backend URL</span><input id="api" type="text" placeholder="https://script.google.com/macros/s/…/exec"></label>
       <label class="fld"><span>Device key</span><input id="key" type="text" placeholder="device key (from the admin console's setup link)"></label>
@@ -462,7 +468,7 @@ async function call(op, body, ms) {
 }
 
 /* ------------------------------------------------------------- state */
-let sess = null, pc = null, dc = null, helloId = null, helloAt = 0, pollT = null, wd = null, connected = false, lastFace = null, wake = null;
+let sess = null, pair = null, pc = null, dc = null, helloId = null, helloAt = 0, pollT = null, wd = null, connected = false, lastFace = null, wake = null;
 let videoOn = true, localOn = false;
 
 function setConn(text, cls) { const c = $("#conn"); c.textContent = text; c.className = "pill " + (cls || ""); }
@@ -471,12 +477,14 @@ function sendM(o) { if (dc && dc.readyState === "open") { dc.send(JSON.stringify
 
 /* ------------------------------------------------------------- setup */
 function showSetup(err) {
+  clearTimeout(pollT); clearTimeout(wd); closePc();
   $("#setup").classList.remove("hide"); $("#grid").classList.add("hide");
   $("#code").value = cfg.code || ""; $("#api").value = cfg.api || ""; $("#key").value = cfg.key ? "••••••••" : "";
   if (!cfg.api || !cfg.key) $("#adv").open = true;
   const e = $("#err"); e.classList.toggle("hide", !err); e.textContent = err || "";
 }
 $("#code").addEventListener("input", e => { e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""); });
+$("#code").addEventListener("keydown", e => { if (e.key === "Enter") $("#go").click(); });
 $("#go").addEventListener("click", () => {
   cfg.code = $("#code").value.trim();
   if ($("#api").value.trim()) cfg.api = $("#api").value.trim();
@@ -486,14 +494,35 @@ $("#go").addEventListener("click", () => {
 
 async function start() {
   if (!cfg.api || !cfg.key || !cfg.code) return showSetup(!cfg.code ? null : "Backend URL and device key are needed (open the portal link from the admin console once on this device).");
-  setConn("looking up the session…", "warn");
-  try {
-    const j = await call("edu_join", { join_code: cfg.code });
-    sess = j.session;
-  } catch (e) { return showSetup("Could not find that session: " + (e.message || e) + ". Check the join code on the admin console."); }
+  setConn("looking for the laptop…", "warn");
+  sess = null; pair = null;
+  if (cfg.code.length === 5) {
+    // the code shown on the laptop itself: works for every session, offline ones included
+    try {
+      const j = await call("signal", { pair: cfg.code, get: "laptop" });
+      if (!j.msg) return showSetup("No laptop is showing the code " + cfg.code + " right now. Check the code on the laptop's first screen, and that the laptop page is open and was set up with the admin console's setup link.");
+    } catch (e) { return showSetup("Could not reach the study backend: " + (e.message || e)); }
+    pair = cfg.code;
+    $("#sess").textContent = "laptop " + pair;
+  } else {
+    try { sess = (await call("edu_join", { join_code: cfg.code })).session; }
+    catch (e) { return showSetup("Could not find that session: " + (e.message || e) + ". Check the code: 5 characters on the laptop, or the 6-character join code on the admin console."); }
+    $("#sess").textContent = (sess.mode || "") + " · child " + (sess.child_id || "-") + " · " + sess.join_code;
+  }
   $("#setup").classList.add("hide"); $("#grid").classList.remove("hide");
-  $("#sess").textContent = (sess.mode || "") + " · child " + (sess.child_id || "-") + " · " + sess.join_code;
+  if (!pair) return waitJoin();
   hello();
+}
+/* Opened with the session's join code: the laptop is found once it has joined
+   that session (it then reports its own pairing code). */
+async function waitJoin() {
+  setConn("waiting for the laptop to join", "warn");
+  $("#panel").innerHTML = '<div class="notice">Waiting for the participant laptop to join session <b>' + sess.join_code +
+    '</b>. On the laptop, type that join code on the first screen. Or, to connect before joining, go back and type the 5-character code shown on the laptop.</div>' +
+    '<button class="speak" onclick="cfg.code=\'\';save();showSetup()">Use the laptop code instead</button>';
+  $("#novid").textContent = "Waiting for the laptop to join the session.";
+  try { const j = await call("edu_join", { join_code: sess.join_code }); if (j.session && j.session.pair_code) { pair = j.session.pair_code; hello(); return; } } catch (e) {}
+  pollT = setTimeout(waitJoin, 4000);
 }
 
 /* ---------------------------------------------------------- signalling
@@ -504,19 +533,20 @@ async function hello() {
   closePc();
   helloId = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
   helloAt = Date.now();
-  setConn("waiting for the laptop…", "warn");
-  $("#novid").textContent = "Waiting for the participant laptop. It connects by itself once it has joined this session (this can take up to 15 seconds).";
-  try { await call("signal", { session_id: sess.session_id, role: "educator", put: { type: "hello", id: helloId } }); }
+  setConn("connecting to laptop " + pair + "…", "warn");
+  $("#novid").textContent = "Connecting to the participant laptop (" + pair + "). This takes about 5 to 15 seconds.";
+  try { await call("signal", { pair, role: "educator", put: { type: "hello", id: helloId } }); }
   catch (e) { setConn("backend unreachable, retrying", "bad"); pollT = setTimeout(hello, 5000); return; }
   pollOffer();
 }
 async function pollOffer() {
   clearTimeout(pollT);
   try {
-    const j = await call("signal", { session_id: sess.session_id, get: "laptop" }, 12000);
+    const j = await call("signal", { pair, get: "laptop" }, 12000);
     if (j.msg && j.msg.type === "offer" && j.msg.id === helloId) { await answer(j.msg.sdp); return; }
   } catch (e) {}
-  if (Date.now() - helloAt > 40000) { hello(); return; }    // say hello again: the laptop may only just have joined
+  if (Date.now() - helloAt > 40000) { hello(); return; }    // say hello again: the laptop page may only just have opened
+  if (Date.now() - helloAt > 20000) $("#novid").textContent = "Still waiting for laptop " + pair + ". Is the Glide page open on the laptop, with this code on its first screen, and is the laptop online?";
   pollT = setTimeout(pollOffer, 1500);
 }
 function closePc() {
@@ -544,7 +574,7 @@ async function answer(sdp) {
     pc.addEventListener("icegatheringstatechange", () => { if (pc && pc.iceGatheringState === "complete") res(); });
     setTimeout(res, 3000);
   });
-  await call("signal", { session_id: sess.session_id, role: "educator", put: { type: "answer", id: helloId, sdp: pc.localDescription.sdp } });
+  await call("signal", { pair, role: "educator", put: { type: "answer", id: helloId, sdp: pc.localDescription.sdp } });
   wd = setTimeout(() => { if (!connected) { setConn("could not connect directly, retrying", "bad"); hello(); } }, 30000);
 }
 function wire(ch) {
@@ -608,6 +638,7 @@ function onPanel(m) {
   const s = m.screen || {};
   $("#scr").textContent = (s.id || "") + (s.bar ? " · " + s.bar.replace(/\s+/g, " ").trim().slice(0, 80) : "");
   document.body.classList.toggle("child", s.mode === "child");
+  $("#sess").textContent = (s.mode || "setup") + (s.child_id ? " · child " + s.child_id : "") + " · laptop " + pair;
   if (s.id !== lastScreen) { lastScreen = s.id; window.scrollTo(0, 0); $("#panel").scrollTop = 0; }
   $("#rec").classList.toggle("hide", !s.recording);
 }

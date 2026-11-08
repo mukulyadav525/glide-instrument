@@ -41,6 +41,8 @@ GLIDE_Study_Data/
 
 When you change `Code.gs` later: **Deploy**, then **Manage deployments**, then edit (pencil), then **Version: New version**. The URL stays the same.
 
+> **Updating to v5.2:** same steps (paste `Code.gs`, Save, new version). The header should then say `glide-backend-5.2.0`. Without it, the portal cannot connect with the laptop's 5-character code.
+>
 > **Updating from v5.0 to v5.1:** paste the new `Code.gs` over the old one, **Save**, then deploy a **new version** as above. Do **not** run `setup()` again: the keys and folders stay as they are. v5.1 adds two operations, `edu_join` and `signal`, used by the educator portal. Until the script is updated, the portal shows *unknown_op* and the laptop works with its own panel. Check with the admin console: its header should say `glide-backend-5.1.0`.
 
 ## 4. Connect the admin console

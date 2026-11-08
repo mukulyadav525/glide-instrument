@@ -62,7 +62,9 @@ const LINK = (function () {
     call,
     ping() { return call("ping", {}, 12000); },
     async join(code) {
-      const j = await call("join", { join_code: String(code || "").trim().toUpperCase() }, 20000);
+      let pair = null; try { pair = REMOTE.pairCode(); } catch (e) {}
+      // v5.2: the laptop's pairing code goes with the join, so a portal opened from the admin console finds this laptop.
+      const j = await call("join", { join_code: String(code || "").trim().toUpperCase(), pair_code: pair }, 20000);
       session = j.session;
       return session;
     },

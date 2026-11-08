@@ -1,5 +1,12 @@
 # Changelog
 
+## v5.2.0 · schema 4.1.0
+
+- **Laptop pairing code.** Every participant laptop shows a 5-character code on its first screen. The educator types it into the portal, which then runs the **whole** session from the start: join code or offline setup, codes, consent answers, everything. Offline sessions work with the portal too (they only need the laptop to have been set up once). The admin console's portal link (join code) still works and finds the laptop once it has joined.
+- **The child's screen shows the question, never the answer options.** The comparison, practice, page, text and retest screens show the question in large text above the things to compare. The educator answers on the child's behalf, on the portal. Educator-only notes are hidden on the laptop while the portal is connected.
+- **Calibration, validation and drift checks are automatic by default.** Each dot records itself once the child has looked for about a second and the eyes are clear. *Manually* is one click away.
+- **Backend** `glide-backend-5.2.0`: `signal` accepts a laptop pairing code; `join` records which laptop joined. Redeploy as a new version.
+
 ## v5.1.0 · schema 4.1.0
 
 **Educator portal.** A new page, `educator.html`, for the special educator's own phone, tablet or laptop. It connects directly to the participant laptop (WebRTC, set up through the study backend) and shows the live camera with the framing oval and face box, what to adjust in words, the six framing checks, every question and button, and a live map of the calibration dot against the gaze estimate. While it is connected, the participant laptop shows only what the child looks at. Every answer is still logged on the laptop's clock. Ctrl+Shift+E on the laptop brings the controls back there.

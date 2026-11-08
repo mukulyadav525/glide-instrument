@@ -1109,15 +1109,22 @@ function applyJoined(cfg) {
 }
 add({ id:"connect", block:"admin", bar:"off",
   enter: () => { if (LINK.configured() && LINK.online() === null) LINK.ping().then(() => paint(), () => paint()); OUTBOX.refresh().then(() => paint()); },
-  stageFn: () => stage(card(el("div", {}, [
+  stageFn: () => {
+    let code = null, open = false; try { code = REMOTE.pairCode(); open = REMOTE.isOpen(); } catch (e) {}
+    const pairBox = !LINK.configured() ? el("div", { class:"notice", text:"This laptop is not linked to the study backend yet, so the educator portal cannot connect. Open the setup link from the admin console once on this laptop." })
+      : open ? el("div", { class:"notice ok", html:"<strong>Educator portal connected.</strong> Everything is answered on the portal from here on." })
+      : el("div", { class:"paircode" }, [el("div", { class:"eyebrow", text:"Educator portal code" }), el("div", { class:"big-code", text: code || "-----" }),
+          el("p", { class:"hint", text:"On the educator's phone, tablet or laptop, open the educator portal (educator.html) and type this code. The questions and buttons then appear there, and this screen shows only what the child sees." })]);
+    stage(card(el("div", {}, [
     el("div", { class:"eyebrow", text:"Glide · participant laptop" }),
     el("h1", { text:"Reading comfort study" }),
+    pairBox,
     el("p", { class:"lede", text:"This laptop is the one the student sits at. The session is normally started from the admin device, which gives you a short join code." }),
     el("table", { class:"t", html:
       "<tbody><tr><th>With the admin device</th><td>Type the join code shown on the admin screen. The child code, educator code and consent answers come from there.</td></tr>" +
       "<tr><th>Without it</th><td>Run offline. Everything is saved on this laptop and uploaded to the study Drive the next time this page is open with a connection.</td></tr>" +
       "<tr><th>Training</th><td>Run offline and choose Educator training on the next screen. Nothing is saved.</td></tr></tbody>" })
-  ]))),
+  ]))); },
   panel: () => {
     const w = el("div", { class:"wrap" });
     w.appendChild(el("div", { class:"eyebrow", text:"Start" }));
@@ -1125,10 +1132,10 @@ add({ id:"connect", block:"admin", bar:"off",
     if (S.link.joined) {
       const c = S.link.admin_session;
       w.appendChild(el("div", { class:"notice ok", html:"<strong>Joined.</strong> " + c.mode + " session for child <strong>" + (c.child_id || "-") + "</strong>, educator " + (c.educator_id || "-") + ". Press Next." }));
-      let portal = false; try { portal = REMOTE.isOpen(); } catch (e) {}
+      let portal = false, pc = ""; try { portal = REMOTE.isOpen(); pc = REMOTE.pairCode(); } catch (e) {}
       w.appendChild(el("div", { class: "notice" + (portal ? " ok" : ""), html: portal
         ? "<strong>Educator portal connected.</strong> From now on this laptop shows only what the child sees; the questions and buttons are on the portal."
-        : "<strong>Educator portal (optional):</strong> open the portal link from the admin console on the educator's phone, tablet or laptop and enter join code <strong>" + c.join_code + "</strong>. It connects by itself. Without it, the controls stay on this laptop." }));
+        : "<strong>Educator portal:</strong> open the portal link from the admin console, or open educator.html and type the laptop code <strong>" + pc + "</strong>. Without it, the controls stay on this laptop." }));
       return w;
     }
     if (!LINK.configured()) {
@@ -1949,7 +1956,7 @@ add({ id:"context", block:"ED_context", bar:"off",
 /* ============================ CHILD: PAIRWISE ============================ */
 function pairBlock(cfg) {
   cfg.pairs.forEach((_, n) => {
-    add({ id:cfg.id + "_" + n, block:cfg.block,
+    add({ id:cfg.id + "_" + n, block:cfg.block, ask: cfg.question,
       skipIf: () => !isChild() || (cfg.pairOk && !cfg.pairOk(cfg.pairs[n])),
       enter: () => { if (!ORDER[cfg.id]) ORDER[cfg.id] = cfg.pairs; say(cfg.prompt); },
       stageFn: () => {
@@ -2003,7 +2010,7 @@ function pairBlock(cfg) {
 }
 
 /* ===================== CHILD: PRACTICE / COMPREHENSION ==================== */
-add({ id:"comprehension", block:"C_practice", skipIf: () => !isChild(),
+add({ id:"comprehension", block:"C_practice", ask:"Which one is easier to see?", skipIf: () => !isChild(),
   enter: () => say("Let us practise. Here are two. One is big and easy to see. One is very small. Point to the one that is easier to see."),
   stageFn: () => stage([
       card(specimen({ sizePx:34 }, "The dog ran."), "1", { sizePx:34 }),
@@ -2276,12 +2283,14 @@ const calComplete = c => !!(c && c.i >= CAL_PTS.length && c.done >= CAL_MIN_POIN
    CAL_AUTO_DWELL_MS and the face is usable. The educator still watches (on
    the portal's video, or beside the child) and can press the button sooner. */
 let CAL_AUTO_T = null;
+/* v5.2: automatic is the default; the educator can switch to manual. */
+const calAuto = () => S._calAuto !== false;
 function autoArm(fn, key) {
   clearTimeout(CAL_AUTO_T);
-  if (!S._calAuto) return;
+  if (!calAuto()) return;
   const t0 = performance.now();
   const tryIt = () => {
-    if (!S._calAuto || CUR_SCREEN.id !== key.screen || key.still() === false) return;
+    if (!calAuto() || CUR_SCREEN.id !== key.screen || key.still() === false) return;
     if (FACEQ.usableNow().ok) { fn("auto"); return; }
     if (performance.now() - t0 < 8000) CAL_AUTO_T = setTimeout(tryIt, 250);
   };
@@ -2300,8 +2309,13 @@ setInterval(() => {
   if (n.textContent !== t) { n.textContent = t; n.className = "notice " + (u.ok ? "ok" : "bad"); }
 }, 300);
 function autoToggle() {
-  return el("button", { class: "opt" + (S._calAuto ? " on" : ""), onclick: () => { S._calAuto = !S._calAuto; log("gaze", "calibration_auto_mode", S._calAuto); paint(); } },
-    [el("span", { text: "Automatic: record each dot by itself" }), el("span", { class: "sub", text: "After the child has looked at it for about a second and the camera sees both eyes. You still watch, and can press the button sooner." })]);
+  const set = v => { if (calAuto() === v) return; S._calAuto = v; log("gaze", "calibration_auto_mode", v); paint(); };
+  const w = el("div", { class: "q" }, [el("div", { class: "q-t", text: "How are the dots recorded?" })]);
+  w.appendChild(el("button", { class: "opt" + (calAuto() ? " on" : ""), onclick: () => set(true) },
+    [el("span", { text: "Automatically (recommended)" }), el("span", { class: "sub", text: "Each dot records itself once the child has looked at it for about a second and the camera sees both eyes. You only watch; press the button to record sooner." })]));
+  w.appendChild(el("button", { class: "opt" + (!calAuto() ? " on" : ""), onclick: () => set(false) },
+    [el("span", { text: "Manually" }), el("span", { class: "sub", text: "Nothing records until you press “They are looking at the dot” (or the space bar)." })]));
+  return w;
 }
 add({ id:"calibrate", block:"gaze", bar:"off", skipIf: () => !gazeOn(),
   focus: () => !!(S._calib && S._calib.i < CAL_PTS.length),
@@ -2325,13 +2339,13 @@ add({ id:"calibrate", block:"gaze", bar:"off", skipIf: () => !gazeOn(),
           GAZE.start("calibration");
           requestAnimationFrame(() => dot.classList.add("shrunk"));
           const order = c.i;
-          c.armedFor = S._calAuto ? order : null;
+          c.armedFor = calAuto() ? order : null;
           autoArm(calRecord, { screen: "calibrate", still: () => S._calib === c && c.i === order && !c.busy });
         });
       } else {
         dot.classList.add("shrunk");
         // automatic mode switched on while this dot was already showing
-        if (S._calAuto && c.armedFor !== c.i && !c.busy) { const order = c.i; c.armedFor = order;
+        if (calAuto() && c.armedFor !== c.i && !c.busy) { const order = c.i; c.armedFor = order;
           autoArm(calRecord, { screen: "calibrate", still: () => S._calib === c && c.i === order && !c.busy }); }
       }
     }
@@ -2342,7 +2356,9 @@ add({ id:"calibrate", block:"gaze", bar:"off", skipIf: () => !gazeOn(),
     const c = S._calib || { i:0, attempt:1, done:0, retries:{}, skipped:[] };
     w.appendChild(el("div", { class:"eyebrow", text:"Calibration · attempt " + c.attempt + " of " + (1 + PROTOCOL.max_recalibrations) + (c.keep_model ? " · adding to the earlier one" : "") }));
     w.appendChild(el("h1", { text:"Teach the camera" }));
-    w.appendChild(el("p", { class:"lede", text:"One dot at a time. When the child is looking straight at it, press the button (or the space bar). Ask them to keep looking until it moves: it takes about a second." }));
+    w.appendChild(el("p", { class:"lede", text: calAuto()
+      ? "One dot at a time. Ask the child to look at each dot and keep looking until it moves. Each dot records itself after about a second, once the camera sees both eyes. Watch the camera picture; press the button only to record sooner."
+      : "One dot at a time. When the child is looking straight at it, press the button (or the space bar). Ask them to keep looking until it moves: it takes about a second." }));
     if (c.i < CAL_PTS.length) {
       w.appendChild(el("button", { class:"btn", style:"width:100%", text: c.busy ? "Recording… keep looking" : "They are looking at the dot", onclick:() => calRecord("educator") }));
       KEYS.set({ " ": () => calRecord("educator") });
@@ -2374,7 +2390,7 @@ add({ id:"calibrate", block:"gaze", bar:"off", skipIf: () => !gazeOn(),
     log("gaze","calibration", GAZE.calibrated ? "complete" : "partial",
       { attempt: S._calib ? S._calib.attempt : null, points_done: S._calib ? S._calib.done : 0, points_total: 9,
         points_skipped: S._calib ? S._calib.skipped : null, retries: S._calib ? S._calib.retries : null, keep_model: S._calib ? S._calib.keep_model : null,
-        auto_mode: !!S._calAuto, order: S._calib ? S._calib.order : null, health: GAZE.health(), interocular_baseline: FACEQ.baseline() }); },
+        auto_mode: calAuto(), order: S._calib ? S._calib.order : null, health: GAZE.health(), interocular_baseline: FACEQ.baseline() }); },
   valid: () => calComplete(S._calib)
 });
 function calSkipPoint() {
@@ -2498,9 +2514,9 @@ add({ id:"validate", block:"gaze", bar:"off", skipIf: () => !(gazeOn() && GAZE.c
       S._val.onsetFor = S._val.i;
       requestAnimationFrame(rt => { S._val.onset = CLOCK.fromPerf(rt);
         EV.log("validation_target_onset", { attempt: S.calibration_attempts, index: S._val.i }, S._val.onset);
-        const v = S._val, i = v.i; v.armedFor = S._calAuto ? i : null;
+        const v = S._val, i = v.i; v.armedFor = calAuto() ? i : null;
         autoArm(measureValPoint, { screen: "validate", still: () => S._val === v && v.i === i && !v.busy }); });
-    } else if (S._val.i < VAL_PTS.length && S._calAuto && S._val.armedFor !== S._val.i && !S._val.busy) {
+    } else if (S._val.i < VAL_PTS.length && calAuto() && S._val.armedFor !== S._val.i && !S._val.busy) {
       const v = S._val, i = v.i; v.armedFor = i;
       autoArm(measureValPoint, { screen: "validate", still: () => S._val === v && v.i === i && !v.busy });
     }
@@ -2575,6 +2591,8 @@ function driftScreen(id, before) {
       host.appendChild(el("div", { class:"valdot", style:"left:50%;top:50%", "aria-hidden":"true" }));
       stage(host, "Quick check before " + before);
       if (!S._drift[id + "_onset"]) requestAnimationFrame(rt => { S._drift[id + "_onset"] = CLOCK.fromPerf(rt); EV.log("drift_target_onset", { check:id }, S._drift[id + "_onset"]); });
+      // automatic (default): measures itself once the eyes are clear; re-armed on "Measure again" and after a recalibration
+      if (!S._drift[id] && !S._drift.busy) autoArm(() => measureDrift(id), { screen: id, still: () => !S._drift[id] && !S._drift.busy });
     },
     panel: () => {
       const w = el("div", { class:"wrap" });
@@ -3008,7 +3026,7 @@ driftScreen("drift_dis", "the pages with distractions");
    next. Each screen records the actual separation so an analyst can tell which
    of the six contrasts the geometry supported. */
 DISTRACTORS.forEach((d, n) => {
-  add({ id:"dis_" + d.id, block:"F_distraction", bar:"off", skipIf: () => !isChild(),
+  add({ id:"dis_" + d.id, block:"F_distraction", bar:"off", ask:"How does this page feel?", skipIf: () => !isChild(),
     enter: () => { if (!ORDER.dis) ORDER.dis = shuffle(DISTRACTORS.map(x => x.id));
       say("Look at this page. How does it make you feel?");
       if (gazeOn() && GAZE.calibrated) GAZE.start(); },
@@ -3055,7 +3073,7 @@ DISTRACTORS.forEach((d, n) => {
 });
 
 /* ======================= CHILD: BUSY vs CALM PAGE ======================== */
-add({ id:"layout", block:"E_layout", bar:"off", skipIf: () => !isChild(),
+add({ id:"layout", block:"E_layout", bar:"off", ask:"Which page would you rather read?", skipIf: () => !isChild(),
   enter: () => { if (!ORDER.lay) ORDER.lay = RNG() < 0.5 ? ["busy","calm"] : ["calm","busy"]; say("Here are two pages. Which one would you rather read?"); },
   stageFn: () => {
     const cfgs = { busy:{ nav:true, topAd:true, midAd:true, side:true, bottomBar:true }, calm:{ subheads:true } };
@@ -3125,7 +3143,7 @@ Nothing told them how long it would stay shut.`;
    CLS signals from preference data, and without a text item there is no
    child-side signal for the text-complexity weight at all, leaving it resting
    entirely on one educator's allocation with nothing to check it against. */
-add({ id:"textlevel", block:"F_text",
+add({ id:"textlevel", block:"F_text", ask:"Which one is easier to understand?",
   skipIf: () => !isChild() || answers.reading_level === "pre",
   enter: () => { if (!ORDER.txt) ORDER.txt = RNG() < 0.5 ? ["dense","plain"] : ["plain","dense"];
     say("Here are two pieces of writing. They say the same thing. Which one is easier to understand?"); },
@@ -3180,7 +3198,7 @@ add({ id:"textlevel", block:"F_text",
 });
 
 /* ============================ CHILD: RETEST ============================== */
-add({ id:"retest", block:"M_reliability", skipIf: () => !isChild(),
+add({ id:"retest", block:"M_reliability", ask:"Which one do you want to read?", skipIf: () => !isChild(),
   enter: () => { if (!ORDER.re) { const f = P.fontId, other = FONTS.filter(x => x.id !== f && !FONTHEALTH.failed().includes(x.id));
       ORDER.re = shuffle([f, (other[Math.floor(RNG() * other.length)] || FONTS[0]).id]); }
     say("Last one. Which of these two do you want to read?"); },
@@ -3948,7 +3966,7 @@ function saveBackup() {
       // v5
       v5: { link: S.link, consent: S.consent, video: S.video, physical: S.physical, framing: S.framing, drift: S.drift,
         calibration_attempts: S.calibration_attempts, breaks: S.breaks, validations: S.validations || [],
-        preview: S.preview || null, remote: S.remote || null, cal_auto: !!S._calAuto,
+        preview: S.preview || null, remote: S.remote || null, cal_auto: calAuto(),
         started_at: S.started_at, session_time_origin_ms: CLOCK.origin, clock_epochs: CLOCK.epochs,
         segments: REC.segments, frame_index: FRAMES.current(), cam_setup: S._camSetup || null, started: !!S._started, bs: S._bs || null, drift_state: S._drift || null }
     }));
@@ -3977,7 +3995,7 @@ function restoreBackup(b) {
   GAZE.calibrated = !!(b.calib && b.calib.done >= 9);
   const v = b.v5 || {};
   ["link","consent","video","physical","framing","drift","breaks","validations","preview","remote"].forEach(k => { if (v[k] !== undefined && v[k] !== null) S[k] = v[k]; });
-  S._calAuto = !!v.cal_auto;
+  S._calAuto = v.cal_auto !== false;
   S.calibration_attempts = v.calibration_attempts || 0;
   if (v.started_at) S.started_at = v.started_at;
   if (v.session_time_origin_ms) CLOCK.resume(v.session_time_origin_ms, v.clock_epochs);
@@ -4067,6 +4085,11 @@ function paint() {
   try { setBar(s.bar === "off" ? "off" : "on"); } catch (e) {}
   try { if (s.stageFn) s.stageFn(); else stage(null); }
   catch (e) { console.warn(e); stage(el("div", { class:"notice bad", text:"This could not be displayed. Tell the researcher, then press Next." })); }
+  /* v5.2: the child sees the QUESTION on their own screen, never the answer
+     buttons: the educator answers on the child's behalf (portal, or the
+     panel/keys on the laptop). Same on every setup, so the stimulus layout
+     does not depend on whether a portal was used. */
+  if (s.ask && isChild()) $("#stage").insertBefore(el("div", { class:"kidq", text: typeof s.ask === "function" ? s.ask() : s.ask }), $("#stage").firstChild);
   const p = $("#panel"); p.innerHTML = "";
   const ikey = s.info || (s.id && INFO[s.id] ? s.id : (s.id ? s.id.split("_")[0] : null));
   const ib = ikey ? infoBar(ikey) : null;

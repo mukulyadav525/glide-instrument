@@ -30,7 +30,20 @@ const REMOTE = (function () {
   const ICE = [{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:stun1.l.google.com:19302" }];
   let pc = null, dc = null, pending = null, handledHello = null, pollT = null, started = false;
   let open = false, local = false, sendTrack = null, sender = null, obs = null, snapT = null, faceT = null, lastHtml = null;
-  let lostAt = null, connects = 0, actions = 0, startedAt = Date.now();
+  let lostAt = null, connects = 0, actions = 0, startedAt = Date.now(), hereAt = 0;
+  /* v5.2 · PAIRING CODE. Every laptop shows a 5-character code from its very
+     first screen. The educator types it into the portal (or opens the admin
+     console's portal link, which finds the laptop once it has joined the
+     session), so the portal can run the whole session, setup included, and
+     works for offline sessions too. The code stays the same across reloads. */
+  const PAIR_KEY = "glide_pair", ALPHA = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+  let pair = null;
+  try { pair = localStorage.getItem(PAIR_KEY); } catch (e) {}
+  if (!/^[A-Z0-9]{5}$/.test(pair || "")) {
+    pair = ""; const r = new Uint32Array(5); crypto.getRandomValues(r);
+    for (let i = 0; i < 5; i++) pair += ALPHA[r[i] % ALPHA.length];
+    try { localStorage.setItem(PAIR_KEY, pair); } catch (e) {}
+  }
 
   const isOpen = () => !!(dc && dc.readyState === "open");
   function controlling() { return open && !local; }
@@ -48,9 +61,13 @@ const REMOTE = (function () {
   /* ------------------------------------------------------------ signalling */
   async function poll() {
     pollT = null;
-    if (!S.link.joined || !LINK.configured()) return schedule(5000);
+    if (!LINK.configured()) return schedule(5000);
     try {
-      const j = await LINK.call("signal", { session_id: S.session_id, get: "educator" }, 10000);
+      // Say "this laptop is here" (so the portal can confirm the code), at most every 4 minutes, never over a pending offer.
+      if (!isOpen() && !(pending && !pending.answered) && Date.now() - hereAt > 240000) {
+        await LINK.call("signal", { pair, role: "laptop", put: { type: "here", id: "" } }, 10000); hereAt = Date.now();
+      }
+      const j = await LINK.call("signal", { pair, get: "educator" }, 10000);
       const m = j.msg;
       if (m && m.type === "hello" && m.id && m.id !== handledHello) { handledHello = m.id; await offer(m.id); }
       else if (m && m.type === "answer" && pending && m.id === pending.id && !pending.answered) {
@@ -89,7 +106,7 @@ const REMOTE = (function () {
       pc.addEventListener("icegatheringstatechange", () => { if (pc && pc.iceGatheringState === "complete") res(); });
       setTimeout(res, 3000);
     });
-    await LINK.call("signal", { session_id: S.session_id, role: "laptop", put: { type: "offer", id, sdp: pc.localDescription.sdp } }, 15000);
+    await LINK.call("signal", { pair, role: "laptop", put: { type: "offer", id, sdp: pc.localDescription.sdp } }, 15000);
     EV.log("educator_portal_offer", { id });
   }
   function wire(ch) {
@@ -257,7 +274,7 @@ const REMOTE = (function () {
 
   return {
     start() {
-      if (started || !S.link.joined || typeof RTCPeerConnection === "undefined") return;
+      if (started || !LINK.configured() || typeof RTCPeerConnection === "undefined") return;
       started = true; startedAt = Date.now();
       const panel = document.getElementById("panel"), foot = document.getElementById("foot");
       obs = new MutationObserver(queueSnap);
@@ -265,9 +282,10 @@ const REMOTE = (function () {
       obs.observe(foot, { subtree: true, childList: true, attributes: true, characterData: true });
       faceT = setInterval(() => { try { sendFace(); } catch (e) {} }, 125);
       schedule(200);
-      EV.log("educator_portal_listening", { session_id: S.session_id });
+      EV.log("educator_portal_listening", { pair });
     },
     controlling, isOpen, send,
+    pairCode: () => pair,
     afterPaint() { if (isOpen()) queueSnap(); applyBody(); },
     /* The "why we ask this" panel opens on the portal, not on the child's screen. */
     modal(html) { return controlling() && send({ t: "modal", html }); },
@@ -275,3 +293,4 @@ const REMOTE = (function () {
     summary() { return { connects, actions, connected_now: open, controls_on_laptop: local }; }
   };
 })();
+REMOTE.start();   // v5.2: listen for the educator portal from the first screen

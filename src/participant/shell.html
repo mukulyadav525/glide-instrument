@@ -231,6 +231,12 @@ body.focus:not(.remote) #focushint{display:flex}
 #pip video,#pip canvas{position:absolute;inset:0;width:100%;height:100%}
 #pip video{object-fit:cover;transform:scaleX(-1)}
 #pvbtn{font-size:12px;padding:7px 10px}
+/* v5.2: the question, on the child's own screen (never the answer buttons) */
+.kidq{width:100%;max-width:860px;font-size:28px;font-weight:600;line-height:1.3;color:var(--ink);text-align:center;padding:6px 8px 4px}
+/* with the portal connected, educator-only notes leave the child's screen */
+body.remote #stage .note{display:none}
+.paircode{border:2px solid var(--accent);background:#EFF5F8;padding:14px 16px;margin:12px 0;text-align:center}
+.paircode .big-code{font-size:46px;color:var(--accent);margin:4px 0}
 
 /* screen-reader-only live region */
 .sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}

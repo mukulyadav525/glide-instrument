@@ -1,0 +1,15 @@
+{
+  "name": "glide-instrument-tests",
+  "private": true,
+  "description": "Headless end-to-end driver for the Glide instrument (see README: Test).",
+  "scripts": {
+    "full": "node run.js full",
+    "withdraw": "node run.js withdraw",
+    "crash": "node run.js crash",
+    "educator": "node run.js educator",
+    "nocam": "node run.js nocam"
+  },
+  "dependencies": {
+    "puppeteer-core": "23.11.1"
+  }
+}

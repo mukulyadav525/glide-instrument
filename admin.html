@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glide Admin Console</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%231D5C7A'/%3E%3Ctext x='16' y='23' font-family='Helvetica' font-size='18' fill='white' text-anchor='middle'%3EA%3C/text%3E%3C/svg%3E">
+<style>
+:root{
+  --bg:#EDEFF2; --surface:#FFFFFF; --ink:#12171C; --muted:#5C6670; --rule:#CFD6DC;
+  --accent:#1D5C7A; --signal:#A8630F; --ok:#1F6B4A; --warn:#8A3324; --tint:#EFF5F8;
+  --ui:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#0F1418;--surface:#182026;--ink:#E6EAED;--muted:#9AA6B0;--rule:#2C3740;--accent:#5FA8CC;--tint:#1C2A33;--ok:#5CB88A;--warn:#E07A66;--signal:#E0A84F}}
+:root[data-theme="dark"]{--bg:#0F1418;--surface:#182026;--ink:#E6EAED;--muted:#9AA6B0;--rule:#2C3740;--accent:#5FA8CC;--tint:#1C2A33;--ok:#5CB88A;--warn:#E07A66;--signal:#E0A84F}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 var(--ui)}
+header{background:#1D5C7A;color:#fff;padding:12px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+header h1{font-size:17px;margin:0;font-weight:600}
+header .st{font-family:var(--mono);font-size:11px;padding:2px 8px;border-radius:9px;background:rgba(255,255,255,.18)}
+header .st.bad{background:#8A3324}
+main{max-width:1180px;margin:0 auto;padding:16px;display:grid;gap:16px;grid-template-columns:minmax(0,380px) minmax(0,1fr)}
+@media (max-width:900px){main{grid-template-columns:minmax(0,1fr)}}
+section{background:var(--surface);border:1px solid var(--rule);padding:16px}
+h2{font-size:15px;margin:0 0 10px}
+.eyebrow{font-family:var(--mono);font-size:10px;letter-spacing:.11em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+label{display:block;margin-bottom:10px}
+label>span{display:block;font-size:12.5px;color:var(--muted);margin-bottom:3px}
+input[type=text],input[type=password],input[type=date],select,textarea{width:100%;padding:8px 10px;border:1px solid var(--rule);background:var(--surface);color:var(--ink);font:inherit;font-size:14px}
+.row{display:flex;gap:8px;flex-wrap:wrap}.row>*{flex:1;min-width:120px}
+.seg{display:flex;border:1px solid var(--rule)}.seg button{flex:1;border:0;background:var(--surface);color:var(--ink);padding:8px;font:inherit;font-size:13.5px;cursor:pointer}
+.seg button.on{background:var(--accent);color:#fff}
+.chk{display:flex;gap:8px;align-items:flex-start;font-size:14px;margin-bottom:8px}
+.chk input{margin-top:4px}
+button.btn{border:1px solid var(--accent);background:var(--accent);color:#fff;padding:9px 16px;font:inherit;font-weight:500;cursor:pointer}
+button.btn.ghost{background:transparent;color:var(--accent)}
+button.btn.warn{border-color:var(--warn);color:var(--warn);background:transparent}
+button.btn.sm{padding:5px 10px;font-size:12.5px}
+button:disabled{opacity:.4;cursor:not-allowed}
+.notice{border-left:3px solid var(--signal);background:var(--tint);padding:10px 12px;font-size:13.5px;margin:10px 0}
+.notice.bad{border-color:var(--warn)}.notice.ok{border-color:var(--ok)}
+.code{font-family:var(--mono);font-size:40px;letter-spacing:.22em;text-align:center;padding:12px;border:2px dashed var(--accent);margin:8px 0;color:var(--accent)}
+.hint{font-size:12.5px;color:var(--muted)}
+.cards{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(280px,1fr))}
+.sess{border:1px solid var(--rule);padding:12px;background:var(--surface)}
+.sess.live{border-left:4px solid var(--ok)}.sess.stale{border-left:4px solid var(--signal)}.sess.done{opacity:.8}
+.sess .top{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.sess .who{font-weight:600}.sess .jc{font-family:var(--mono);color:var(--accent);letter-spacing:.12em}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:12.5px;margin:8px 0}
+.kv b{font-weight:500;color:var(--muted)}
+.bar{height:4px;background:var(--rule);margin:6px 0}.bar>div{height:100%;background:var(--accent)}
+.acts{display:flex;gap:6px;flex-wrap:wrap}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+td,th{border-bottom:1px solid var(--rule);padding:6px;text-align:left;vertical-align:top}
+th{color:var(--muted);font-weight:500}
+.tablewrap{overflow-x:auto}
+.pill{font-family:var(--mono);font-size:10.5px;padding:1px 6px;border-radius:8px;background:var(--tint);white-space:nowrap}
+.pill.r{background:#8A3324;color:#fff}.pill.g{background:#1F6B4A;color:#fff}
+dialog{border:1px solid var(--rule);background:var(--surface);color:var(--ink);max-width:460px;width:calc(100% - 32px);padding:18px}
+dialog::backdrop{background:rgba(0,0,0,.45)}
+a{color:var(--accent)}
+.full{grid-column:1/-1}
+</style>
+</head>
+<body>
+<header>
+  <h1>Glide · admin console</h1>
+  <span class="st" id="conn">not connected</span>
+  <span style="margin-left:auto;font-family:var(--mono);font-size:11px;opacity:.8">v5.0.0</span>
+</header>
+<main>
+  <div style="display:grid;gap:16px;align-content:start">
+    <section id="newsec">
+      <div class="eyebrow">Start</div>
+      <h2>New session</h2>
+      <div class="seg" id="mode"><button data-v="child" class="on">Child session</button><button data-v="educator">Educator session</button></div>
+      <div style="height:10px"></div>
+      <div class="row">
+        <label><span>Child code (never a name)</span><input type="text" id="child" placeholder="C-07" autocomplete="off"></label>
+        <label><span>Educator code</span><input type="text" id="educator" placeholder="E-02" autocomplete="off"></label>
+      </div>
+      <div id="childonly">
+        <label><span>Consent form version on file</span><input type="text" id="formv" placeholder="GLIDE-GPF-v3 (2026-10)"></label>
+        <div class="eyebrow" style="margin-top:6px">Guardian form says yes to</div>
+        <label class="chk"><input type="checkbox" id="g_main"><span>Taking part in the study (required)</span></label>
+        <label class="chk"><input type="checkbox" id="g_gaze"><span>Eye tracking</span></label>
+        <label class="chk"><input type="checkbox" id="g_video"><span>Video recording of the face (no audio)</span></label>
+        <label><span>Capacity to assent (optional here; otherwise asked on the laptop)</span>
+          <select id="capacity"><option value="">Ask on the laptop</option><option value="capable">Can understand and decide</option><option value="diminished">Diminished capacity to decide</option></select></label>
+        <label><span>Keep data until (retention / destruction date)</span><input type="date" id="retain"></label>
+        <label class="chk"><input type="checkbox" id="flash" checked><span>Sync flash at video start and end (a single white frame)</span></label>
+      </div>
+      <div id="edonly" style="display:none">
+        <label class="chk"><input type="checkbox" id="g_main_e" checked><span>Guardian consent for this child is on file</span></label>
+      </div>
+      <label><span>Notes (no names, no personal details)</span><input type="text" id="notes" maxlength="300"></label>
+      <button class="btn" id="create" style="width:100%">Create session and get a join code</button>
+      <div id="created"></div>
+    </section>
+
+    <section>
+      <div class="eyebrow">Connection</div>
+      <h2>Backend</h2>
+      <label><span>Backend URL (Apps Script /exec, or http://localhost:8765/api)</span><input type="text" id="api" placeholder="https://script.google.com/macros/s/…/exec"></label>
+      <label><span>Admin key</span><input type="password" id="akey" autocomplete="off"></label>
+      <div class="row"><button class="btn ghost" id="save">Save and test</button><button class="btn ghost" id="folder">Open study folder</button></div>
+      <details style="margin-top:12px">
+        <summary>Set up a participant laptop</summary>
+        <p class="hint">Open this link once on each participant laptop. It saves the backend URL and the device key on that laptop. The device key can only upload; it cannot read the data back.</p>
+        <label><span>Where the instrument is hosted (its index.html)</span><input type="text" id="instr" placeholder="https://…/index.html or http://localhost:8000/index.html"></label>
+        <label><span>Device key</span><input type="password" id="dkey" autocomplete="off"></label>
+        <button class="btn ghost sm" id="mklink">Make the setup link</button>
+        <div id="setuplink" class="hint" style="word-break:break-all;margin-top:8px"></div>
+      </details>
+    </section>
+  </div>
+
+  <div style="display:grid;gap:16px;align-content:start">
+    <section>
+      <div class="row" style="align-items:center"><div><div class="eyebrow">Now</div><h2 style="margin:0">Live sessions</h2></div>
+        <div style="flex:0 0 auto" class="hint" id="refreshed"></div></div>
+      <div style="height:10px"></div>
+      <div class="cards" id="live"><p class="hint">Connect to the backend to see sessions.</p></div>
+    </section>
+    <section>
+      <div class="eyebrow">Registry</div>
+      <h2>All sessions</h2>
+      <div class="tablewrap"><table id="reg"><thead><tr><th>Created</th><th>Child</th><th>Mode</th><th>Status</th><th>Files</th><th>Video</th><th>Folder</th></tr></thead><tbody></tbody></table></div>
+    </section>
+  </div>
+</main>
+
+<dialog id="dlg"><form method="dialog" id="dlgform"></form></dialog>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const CFG_KEY = "glide_admin";
+let cfg = {}; try { cfg = JSON.parse(localStorage.getItem(CFG_KEY) || "{}"); } catch (e) {}
+const saveCfg = () => { try { localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); } catch (e) {} };
+$("#api").value = cfg.api || ""; $("#akey").value = cfg.akey || ""; $("#instr").value = cfg.instr || ""; $("#dkey").value = cfg.dkey || "";
+let mode = "child";
+const esc = s => String(s === null || s === undefined ? "" : s).replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+
+async function call(op, body) {
+  if (!cfg.api) throw new Error("Set the backend URL first");
+  const r = await fetch(cfg.api, { method:"POST", redirect:"follow", headers:{ "Content-Type":"text/plain;charset=utf-8" },
+    body: JSON.stringify(Object.assign({ op, key: cfg.akey }, body || {})) });
+  const j = await r.json();
+  if (!j.ok) throw new Error(j.error || "server error");
+  return j;
+}
+function conn(ok, text) { const c = $("#conn"); c.textContent = text; c.classList.toggle("bad", !ok); }
+
+/* ---- connection */
+$("#save").onclick = async () => {
+  cfg.api = $("#api").value.trim(); cfg.akey = $("#akey").value.trim(); saveCfg();
+  try { const j = await call("ping"); conn(j.role === "admin", j.role === "admin" ? "connected · " + j.version : "this is a DEVICE key, not the admin key"); refresh(); }
+  catch (e) { conn(false, "cannot connect: " + e.message); }
+};
+$("#folder").onclick = async () => { try { const j = await call("folder_url"); window.open(j.url, "_blank", "noopener"); } catch (e) { alert(e.message); } };
+$("#mklink").onclick = () => {
+  cfg.instr = $("#instr").value.trim(); cfg.dkey = $("#dkey").value.trim(); saveCfg();
+  if (!cfg.instr || !cfg.dkey || !cfg.api) { $("#setuplink").textContent = "Fill in the backend URL, the instrument address and the device key."; return; }
+  const u = cfg.instr + (cfg.instr.includes("?") ? "&" : "?") + "api=" + encodeURIComponent(cfg.api) + "&k=" + encodeURIComponent(cfg.dkey);
+  $("#setuplink").innerHTML = '<a href="' + esc(u) + '" target="_blank" rel="noopener">' + esc(u) + '</a><br><button class="btn ghost sm" id="cp">Copy</button>';
+  $("#cp").onclick = () => navigator.clipboard && navigator.clipboard.writeText(u);
+};
+
+/* ---- new session */
+document.querySelectorAll("#mode button").forEach(b => b.onclick = () => {
+  mode = b.dataset.v; document.querySelectorAll("#mode button").forEach(x => x.classList.toggle("on", x === b));
+  $("#childonly").style.display = mode === "child" ? "" : "none"; $("#edonly").style.display = mode === "educator" ? "" : "none";
+});
+$("#create").onclick = async () => {
+  const child = $("#child").value.trim();
+  const out = $("#created");
+  if (!child) { out.innerHTML = '<div class="notice bad">Enter the child code.</div>'; return; }
+  const gm = mode === "child" ? $("#g_main").checked : $("#g_main_e").checked;
+  if (!gm) { out.innerHTML = '<div class="notice bad">Guardian consent must be on file before any session.</div>'; return; }
+  if (mode === "child" && (!$("#formv").value.trim() || !$("#retain").value)) { out.innerHTML = '<div class="notice bad">Enter the consent form version and the retention date.</div>'; return; }
+  const config = { mode, child_id: child, educator_id: $("#educator").value.trim(), guardian_main: gm,
+    guardian_gaze: mode === "child" && $("#g_gaze").checked, guardian_video: mode === "child" && $("#g_video").checked,
+    consent_form_version: $("#formv").value.trim(), retention_until: $("#retain").value, capacity: $("#capacity").value || null,
+    sync_flash: $("#flash").checked, notes: $("#notes").value.trim() };
+  $("#create").disabled = true;
+  try {
+    const j = await call("create_session", { config });
+    const s = j.session;
+    out.innerHTML = '<div class="notice ok">Session created for <b>' + esc(s.child_id) + '</b> (' + esc(s.mode) + '). On the participant laptop, type:</div>' +
+      '<div class="code">' + esc(s.join_code) + '</div>' +
+      '<p class="hint">Eye tracking: ' + (s.guardian_gaze ? "agreed" : "no") + ' · Video: ' + (s.guardian_video ? "agreed" : "no") + ' · Form ' + esc(s.consent_form_version || "-") +
+      ' · <a href="' + esc(s.folder_url) + '" target="_blank" rel="noopener">Drive folder</a></p>';
+    refresh();
+  } catch (e) { out.innerHTML = '<div class="notice bad">' + esc(e.message) + '</div>'; }
+  $("#create").disabled = false;
+};
+
+/* ---- live view */
+function ago(iso) { if (!iso) return "never"; const s = Math.round((Date.now() - Date.parse(iso)) / 1000); return s < 60 ? s + " s ago" : s < 3600 ? Math.round(s / 60) + " min ago" : Math.round(s / 3600) + " h ago"; }
+function sessCard(s) {
+  const L = s.live || {};
+  const seen = L.server_seen ? (Date.now() - Date.parse(L.server_seen)) / 1000 : Infinity;
+  const finished = L.completed || L.withdrawn || s.status === "complete" || s.status === "withdrawn";
+  const cls = finished ? "done" : seen < 20 ? "live" : "stale";
+  const ob = L.outbox || {};
+  const pct = L.total ? Math.round(L.index / L.total * 100) : 0;
+  const d = document.createElement("div"); d.className = "sess " + cls;
+  d.innerHTML =
+    '<div class="top"><span class="who">' + esc(s.child_id) + ' <span class="hint">' + esc(s.mode) + '</span></span><span class="jc">' + esc(s.join_code || "") + '</span></div>' +
+    (L.screen_id ? '<div class="bar"><div style="width:' + pct + '%"></div></div>' : '') +
+    '<div class="kv">' +
+      '<b>Status</b><span>' + esc(L.withdrawn ? "withdrawn" : L.completed ? "complete" : L.ended_early ? "ended early" : L.screen_id ? "running" : s.status) + ' · seen ' + ago(L.server_seen || s.last_seen) + '</span>' +
+      (L.screen_id ? '<b>Screen</b><span>' + esc(L.screen_id) + ' (' + L.index + '/' + L.total + ') · ' + L.elapsed_min + ' min' + (L.on_break ? ' · <span class="pill">on break</span>' : '') + '</span>' : '') +
+      (L.screen_id ? '<b>Video</b><span>' + (L.video_deleted ? '<span class="pill r">deleted</span>' : L.recording ? '<span class="pill g">● recording</span> ' + (L.fps_10s || "-") + ' fps' : L.camera_lost ? '<span class="pill r">camera lost</span>' : L.video_consented ? "not recording" : "not consented") +
+        (L.face_share_30s !== null && L.face_share_30s !== undefined ? ' · face ' + Math.round(L.face_share_30s * 100) + '%' : '') + '</span>' : '') +
+      (L.screen_id ? '<b>Gaze</b><span>' + (L.gaze_on ? (L.validation_deg !== null ? L.validation_deg + '° ' + (L.validation_meets_protocol ? "✓" : "✗") : "calibrating") : (L.gaze_health || "off")) + (L.calibration_attempts ? ' · ' + L.calibration_attempts + ' attempt(s)' : '') + '</span>' : '') +
+      '<b>Uploads</b><span>' + (ob.uploaded || s.files_uploaded || 0) + ' done' + (ob.pending ? ', ' + ob.pending + ' waiting (' + ((ob.bytes_pending || 0) / 1e6).toFixed(1) + ' MB)' : '') + (L.storage_write_failed ? ' · <span class="pill r">laptop storage error</span>' : '') + '</span>' +
+    '</div>';
+  const acts = document.createElement("div"); acts.className = "acts";
+  const b = (t, cls, fn) => { const x = document.createElement("button"); x.className = "btn sm " + cls; x.textContent = t; x.onclick = fn; acts.appendChild(x); return x; };
+  if (!finished) {
+    b("Message", "ghost", () => ask("Message to the educator", [["text", "Message", "text"]], v => cmd(s, "message", { text: v.text })));
+    b("Stop", "ghost", () => ask("End the session early", [["reason", "Reason (tired, distressed, out of time…)", "text"]], v => cmd(s, "stop", { reason: v.reason || "stopped from admin device" })));
+    b("Withdraw", "warn", () => ask("Withdraw this session", [["reason", "Reason (optional)", "text"], ["delete_video", "Also delete the video (keep the answers)", "check"]],
+      v => cmd(s, "withdraw", { reason: v.reason || "withdrawn from admin device", delete_video: !!v.delete_video })));
+  }
+  if (s.guardian_video === true || s.guardian_video === "TRUE" || s.guardian_video === "true" || L.video_consented)
+    if (!(L.video_deleted || s.video_deleted === true || s.video_deleted === "TRUE"))
+      b("Delete video", "warn", () => ask("Delete this session's video from Drive and the laptop?", [["reason", "Reason", "text"]], async v => {
+        await cmd(s, "delete_video", { reason: v.reason || "admin request" });
+        try { const r = await call("delete_video", { session: { session_id: s.session_id, child_id: s.child_id, mode: s.mode, date: (s.created_at || "").slice(0, 10) }, reason: v.reason || "admin request" });
+          alert(r.deleted_files + " video file(s) deleted" + (r.permanent ? " permanently." : " (moved to Drive trash; empty the trash to remove them now).")); } catch (e) { alert(e.message); }
+      }));
+  if (s.folder_url) { const a = document.createElement("a"); a.href = s.folder_url; a.target = "_blank"; a.rel = "noopener"; a.textContent = "Folder"; a.className = "hint"; a.style.alignSelf = "center"; acts.appendChild(a); }
+  d.appendChild(acts);
+  return d;
+}
+async function cmd(s, type, args) { try { await call("command", { session_id: s.session_id, type, args }); refresh(); } catch (e) { alert(e.message); } }
+function ask(title, fields, done) {
+  const f = $("#dlgform"); f.innerHTML = "<h2>" + esc(title) + "</h2>";
+  fields.forEach(([k, lab, type]) => {
+    if (type === "check") f.insertAdjacentHTML("beforeend", '<label class="chk"><input type="checkbox" name="' + k + '"><span>' + esc(lab) + '</span></label>');
+    else f.insertAdjacentHTML("beforeend", '<label><span>' + esc(lab) + '</span><input type="text" name="' + k + '"></label>');
+  });
+  f.insertAdjacentHTML("beforeend", '<div class="row"><button class="btn ghost" value="cancel">Cancel</button><button class="btn" value="ok">Send</button></div>');
+  const dlg = $("#dlg");
+  dlg.onclose = () => { if (dlg.returnValue !== "ok") return; const v = {}; fields.forEach(([k, , t]) => { const n = f.elements[k]; v[k] = t === "check" ? n.checked : n.value.trim(); }); done(v); };
+  dlg.showModal();
+}
+let busy = false;
+async function refresh() {
+  if (busy || !cfg.api || !cfg.akey) return; busy = true;
+  try {
+    const j = await call("list_sessions", { limit: 200 });
+    conn(true, "connected");
+    const live = $("#live"); live.innerHTML = "";
+    const recent = j.sessions.filter(s => { const L = s.live; return (L && L.server_seen && !L.completed && !L.withdrawn) || s.status === "created" || s.status === "joined"
+      || (L && L.server_seen && (Date.now() - Date.parse(L.server_seen)) < 3600e3); });
+    if (!recent.length) live.innerHTML = '<p class="hint">No live sessions. Create one on the left.</p>';
+    recent.forEach(s => live.appendChild(sessCard(s)));
+    const tb = $("#reg tbody"); tb.innerHTML = "";
+    j.sessions.forEach(s => {
+      const tr = document.createElement("tr");
+      const yes = v => v === true || v === "TRUE" || v === "true";
+      tr.innerHTML = "<td>" + esc((s.created_at || "").slice(0, 16).replace("T", " ")) + "</td><td>" + esc(s.child_id) + "</td><td>" + esc(s.mode) + "</td><td>" + esc(s.status) +
+        (yes(s.withdrawn) ? ' <span class="pill r">withdrawn</span>' : "") + "</td><td>" + esc(s.files_uploaded || 0) + "</td><td>" +
+        (yes(s.video_deleted) ? '<span class="pill r">deleted</span>' : yes(s.guardian_video) ? "consented" : "-") + "</td><td>" +
+        (s.folder_url ? '<a href="' + esc(s.folder_url) + '" target="_blank" rel="noopener">open</a>' : "") + "</td>";
+      tb.appendChild(tr);
+    });
+    $("#refreshed").textContent = "updated " + new Date().toLocaleTimeString();
+  } catch (e) { conn(false, "cannot reach backend: " + e.message); }
+  busy = false;
+}
+setInterval(refresh, 5000);
+if (cfg.api && cfg.akey) { call("ping").then(j => conn(j.role === "admin", j.role === "admin" ? "connected · " + j.version : "device key given"), e => conn(false, "cannot connect")); refresh(); }
+const t = new Date(); t.setFullYear(t.getFullYear() + 5); $("#retain").value = t.toISOString().slice(0, 10);
+</script>
+</body>
+</html>

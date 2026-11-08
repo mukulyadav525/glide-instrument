@@ -6,10 +6,12 @@ Two uses:
   2. A no-internet fallback. Run it ON THE PARTICIPANT LAPTOP (the camera needs
      localhost or https), open http://localhost:8765/ there, and open
      http://<that laptop's LAN IP>:8765/admin.html on the admin device.
+     (The educator portal needs a secure page for its camera-free view too:
+     open it at http://localhost on the same laptop, or serve over https.)
      Data lands in ./local_drive/GLIDE_Study_Data/ in exactly the Drive layout;
      copy that folder into the study Drive afterwards.
 
-    python3 glide_local_server.py [--port 8765] [--data ./local_drive]
+    python3 backend/local_server/glide_local_server.py [--port 8765] [--data ./local_drive]
 
 Keys are created on first run and printed; they live in <data>/keys.json.
 Standard library only.
@@ -19,9 +21,8 @@ from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 
 HERE = pathlib.Path(__file__).resolve().parent
-# The site to serve: the project's dist/ folder, or, in the GitHub repo
-# layout (source/backend/...), the repository root that holds index.html.
-DIST = next((d for d in [HERE.parent / "dist", HERE.parent.parent] if (d / "index.html").exists()), HERE.parent / "dist")
+# The site to serve: the repository root (backend/local_server/ -> ../..), which holds the built pages.
+DIST = HERE.parent.parent
 JOIN_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 REG_HEADERS = ["session_id","created_at","source","mode","child_id","educator_id","join_code","capacity",
   "consent_form_version","guardian_main","guardian_gaze","guardian_video","retention_until",
@@ -63,7 +64,29 @@ class Store:
             for row in self.state["registry"].values(): w.writerow(row)
 
     # ---- ops (same names and shapes as Code.gs)
-    def op_ping(self, r, role): return {"role": role, "version": "glide-local-5.0.0"}
+    def op_ping(self, r, role): return {"role": role, "version": "glide-local-5.1.0"}
+    # ---- v5.1: educator portal (same shapes as Code.gs)
+    def op_edu_join(self, r, role):
+        code = re.sub(r"[^A-Z0-9]", "", str(r.get("join_code") or "").upper())
+        sid = self.state["join"].get(code)
+        if not sid: raise ValueError("unknown_join_code")
+        s = self.state["sessions"][sid]
+        keys = ["session_id","join_code","mode","child_id","educator_id","guardian_gaze","guardian_video","date","created_at","joined_at"]
+        return {"session": {k: s.get(k) for k in keys}, "status": self.state["status"].get(sid)}
+    def op_signal(self, r, role):
+        sid = str(r.get("session_id") or "")
+        if not re.match(r"^s[a-z0-9]{6,30}$", sid): raise ValueError("bad_session_id")
+        if sid not in self.state["sessions"]: raise ValueError("unknown_session")
+        box = self.__dict__.setdefault("signals", {})
+        if r.get("put"):
+            if r.get("role") not in ("laptop", "educator"): raise ValueError("bad_role")
+            m = r["put"]; msg = {"type": str(m.get("type") or ""), "id": str(m.get("id") or "")[:40], "sdp": m.get("sdp"), "at": now(), "_t": time.time()}
+            if len(json.dumps(msg)) > 90000: raise ValueError("signal_too_large")
+            box[(sid, r["role"])] = msg; return {}
+        if r.get("get") not in ("laptop", "educator"): raise ValueError("bad_role")
+        m = box.get((sid, r["get"]))
+        if m and time.time() - m["_t"] > 600: m = None
+        return {"msg": {k: v for k, v in m.items() if k != "_t"} if m else None}
     def op_create_session(self, r, role):
         c = r.get("config") or {}
         mode = "educator" if c.get("mode") == "educator" else "child"
@@ -153,6 +176,15 @@ ADMIN_ONLY = {"create_session", "list_sessions", "status", "command", "folder_ur
 def make_handler(store):
     class H(SimpleHTTPRequestHandler):
         def __init__(self, *a, **k): super().__init__(*a, directory=str(DIST), **k)
+        # Only the site itself is served. The data folder and keys.json sit
+        # under the same repository, and must never be reachable over the LAN.
+        def do_GET(self):
+            path = self.path.split("?", 1)[0]
+            if path == "/": path = "/index.html"
+            if path in ("/index.html", "/educator.html", "/admin.html", "/DATA_DICTIONARY.csv") or (path.startswith("/mediapipe/") and ".." not in path):
+                return super().do_GET()
+            self.send_error(404)
+        def do_HEAD(self): self.send_error(405)
         def log_message(self, fmt, *a):
             if "/api" in (self.path or ""): return
             super().log_message(fmt, *a)
@@ -191,6 +223,7 @@ def main():
     print(f"GLIDE local backend on http://localhost:{a.port}/  (data: {store.root})")
     print(f"  admin console:  http://localhost:{a.port}/admin.html   admin key: {store.keys['ADMIN_KEY']}")
     print(f"  laptop setup:   http://localhost:{a.port}/index.html?api={api}&k={store.keys['DEVICE_KEY']}")
+    print(f"  educator portal: http://localhost:{a.port}/educator.html?api={api}&k={store.keys['DEVICE_KEY']}")
     ThreadingHTTPServer(("0.0.0.0", a.port), make_handler(store)).serve_forever()
 
 if __name__ == "__main__":

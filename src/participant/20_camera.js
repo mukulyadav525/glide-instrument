@@ -335,6 +335,12 @@ const SYNC = {
     if (!this.enabled) { EV.log("sync_flash_skipped", { label }); return Promise.resolve(); }
     const n = document.getElementById("syncflash");
     return new Promise(res => {
+      /* v5.1: animation frames do not run while the tab is hidden, and a
+         flash that never resolves would hang whatever awaits it (camera
+         setup). Give up after 2 s and say so. */
+      let done = false;
+      const fin = () => { if (!done) { done = true; res(); } };
+      setTimeout(() => { if (!done) { n.classList.remove("on"); EV.log("sync_flash_timeout", { label, hidden: document.hidden }); fin(); } }, 2000);
       requestAnimationFrame(t0 => {
         n.classList.add("on");
         requestAnimationFrame(t1 => {
@@ -342,7 +348,7 @@ const SYNC = {
           setTimeout(() => requestAnimationFrame(t2 => {
             n.classList.remove("on");
             EV.log("sync_flash_off", { label, frame_index: FRAMES.current() }, CLOCK.fromPerf(t2));
-            res();
+            fin();
           }), 250);
         });
       });
@@ -358,12 +364,12 @@ const SYNC = {
    Head pose from landmark depth is approximate (degrees, +-5 or so); it is
    for flagging unusable stretches, not for analysis of head movement. */
 const FACEQ = (function () {
-  let hooked = false, last = 0, n = 0, baseIOD = null, baseDistCm = null, latest = null;
+  let hooked = false, last = 0, n = 0, baseIOD = null, baseDistCm = null, latest = null, pts = null;
   const tiny = document.createElement("canvas"); tiny.width = 64; tiny.height = 36;
   const L = { lOut:33, lIn:133, lTop:159, lBot:145, rIn:362, rOut:263, rTop:386, rBot:374,
               nose:1, cheekL:234, cheekR:454, chin:152, brow:10 };
   const deg = r => +(r * 180 / Math.PI).toFixed(1);
-  function measure(ok, pts, canvas) {
+  function measure(ok, lm, canvas) {
     const t = CLOCK.t();
     const row = { t_perf:t, frame_index:FRAMES.current(), face_detected:!!ok,
       box_x:null, box_y:null, box_w:null, box_h:null,
@@ -371,14 +377,17 @@ const FACEQ = (function () {
       landmark_confidence:null, yaw_deg:null, pitch_deg:null, roll_deg:null,
       ear_left:null, ear_right:null, eyes_closed:null, interocular_px:null, distance_ratio:null,
       face_brightness:null, bg_brightness:null, screen_id: CUR_SCREEN.id };
-    if (ok && pts && pts.length >= 455) {
+    if (!ok) pts = null;
+    if (ok && lm && lm.length >= 455) {
       let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
-      for (const p of pts) { if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0]; if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1]; }
+      for (const p of lm) { if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0]; if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1]; }
       row.box_x = Math.round(x0); row.box_y = Math.round(y0); row.box_w = Math.round(x1 - x0); row.box_h = Math.round(y1 - y0);
-      const P = i => pts[i], d = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+      const P = i => lm[i], d = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
       const lc = [(P(L.lOut)[0] + P(L.lIn)[0]) / 2, (P(L.lOut)[1] + P(L.lIn)[1]) / 2];
       const rc = [(P(L.rOut)[0] + P(L.rIn)[0]) / 2, (P(L.rOut)[1] + P(L.rIn)[1]) / 2];
       row.interocular_px = +d(lc, rc).toFixed(1);
+      // v5.1: eye centres for the live overlay (portal and laptop preview). Not exported.
+      pts = { le: [Math.round(lc[0]), Math.round(lc[1])], re: [Math.round(rc[0]), Math.round(rc[1])] };
       row.roll_deg  = deg(Math.atan2(P(L.rOut)[1] - P(L.lOut)[1], P(L.rOut)[0] - P(L.lOut)[0]));
       row.yaw_deg   = deg(Math.atan2((P(L.cheekR)[2] || 0) - (P(L.cheekL)[2] || 0), P(L.cheekR)[0] - P(L.cheekL)[0]));
       row.pitch_deg = deg(Math.atan2((P(L.chin)[2] || 0) - (P(L.brow)[2] || 0), P(L.chin)[1] - P(L.brow)[1]));
@@ -428,6 +437,21 @@ const FACEQ = (function () {
       } catch (e) { return false; }
     },
     latest() { return latest; },
+    points() { return pts; },
+    /* Is this moment usable for teaching the gaze model? A training sample
+       taken mid-blink, with the head turned, or with no face at all teaches
+       the regression the wrong mapping, and one bad sample in 45 measurably
+       worsens accuracy. Unknown (face model not hooked) is allowed, and the
+       caller records that it was ungated. */
+    usableNow(maxAgeMs) {
+      if (!hooked || !latest) return { ok: true, gated: false, why: "face_model_not_hooked" };
+      const age = CLOCK.t() - latest.t_perf;
+      if (age > (maxAgeMs || 500)) return { ok: false, gated: true, why: "no_recent_frame" };
+      if (!latest.face_detected) return { ok: false, gated: true, why: "no_face" };
+      if (latest.eyes_closed || Math.min(latest.ear_left, latest.ear_right) < PROTOCOL.ear_closed) return { ok: false, gated: true, why: "eyes_closed" };
+      if (Math.abs(latest.yaw_deg) > PROTOCOL.usable_pose_max_yaw_deg || Math.abs(latest.pitch_deg) > PROTOCOL.usable_pose_max_pitch_deg) return { ok: false, gated: true, why: "head_turned" };
+      return { ok: true, gated: true, why: "ok" };
+    },
     setBaseline(distCm) { if (latest && latest.interocular_px) { baseIOD = latest.interocular_px; baseDistCm = distCm || null;
       EV.log("interocular_baseline", { interocular_px: baseIOD, distance_cm: baseDistCm }); } return baseIOD; },
     baseline() { return { interocular_px: baseIOD, distance_cm: baseDistCm }; },

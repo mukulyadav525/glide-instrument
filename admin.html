@@ -107,7 +107,7 @@ a{color:var(--accent)}
       <div class="row"><button class="btn ghost" id="save">Save and test</button><button class="btn ghost" id="folder">Open study folder</button></div>
       <details style="margin-top:12px">
         <summary>Set up a participant laptop</summary>
-        <p class="hint">Open this link once on each participant laptop. It saves the backend URL and the device key on that laptop. The device key can only upload; it cannot read the data back.</p>
+        <p class="hint">Open this link once on each participant laptop. It saves the backend URL and the device key on that laptop. The device key can only upload; it cannot read the data back. The same two settings also make the <b>educator portal link</b> shown with each new session.</p>
         <label><span>Where the instrument is hosted (its index.html)</span><input type="text" id="instr" placeholder="https://…/index.html or http://localhost:8000/index.html"></label>
         <label><span>Device key</span><input type="password" id="dkey" autocomplete="off"></label>
         <button class="btn ghost sm" id="mklink">Make the setup link</button>
@@ -168,6 +168,21 @@ $("#mklink").onclick = () => {
   $("#cp").onclick = () => navigator.clipboard && navigator.clipboard.writeText(u);
 };
 
+/* ---- v5.1: educator portal link (educator.html beside index.html), for one session */
+function portalLink(code) {
+  if (!cfg.instr || !cfg.dkey || !cfg.api) return null;
+  let base = cfg.instr.split("?")[0];
+  base = /\/index\.html$/.test(base) ? base.replace(/index\.html$/, "educator.html") : base.replace(/\/?$/, "/") + "educator.html";
+  return base + "?api=" + encodeURIComponent(cfg.api) + "&k=" + encodeURIComponent(cfg.dkey) + (code ? "&code=" + encodeURIComponent(code) : "");
+}
+function portalHtml(code) {
+  const u = portalLink(code);
+  if (!u) return '<p class="hint">Educator portal: fill in “Set up a participant laptop” (instrument address and device key) once, and a portal link appears here.</p>';
+  return '<p class="hint"><b>Educator portal</b> (live video and all the questions, on the educator\'s phone or tablet): <a href="' + esc(u) + '" target="_blank" rel="noopener">open</a> · ' +
+    '<button class="btn ghost sm" data-copy="' + esc(u) + '">Copy link</button></p>';
+}
+document.addEventListener("click", e => { const b = e.target.closest("[data-copy]"); if (b && navigator.clipboard) { navigator.clipboard.writeText(b.getAttribute("data-copy")); b.textContent = "Copied"; setTimeout(() => b.textContent = "Copy link", 1500); } });
+
 /* ---- new session */
 document.querySelectorAll("#mode button").forEach(b => b.onclick = () => {
   mode = b.dataset.v; document.querySelectorAll("#mode button").forEach(x => x.classList.toggle("on", x === b));
@@ -191,7 +206,7 @@ $("#create").onclick = async () => {
     out.innerHTML = '<div class="notice ok">Session created for <b>' + esc(s.child_id) + '</b> (' + esc(s.mode) + '). On the participant laptop, type:</div>' +
       '<div class="code">' + esc(s.join_code) + '</div>' +
       '<p class="hint">Eye tracking: ' + (s.guardian_gaze ? "agreed" : "no") + ' · Video: ' + (s.guardian_video ? "agreed" : "no") + ' · Form ' + esc(s.consent_form_version || "-") +
-      ' · <a href="' + esc(s.folder_url) + '" target="_blank" rel="noopener">Drive folder</a></p>';
+      ' · <a href="' + esc(s.folder_url) + '" target="_blank" rel="noopener">Drive folder</a></p>' + portalHtml(s.join_code);
     refresh();
   } catch (e) { out.innerHTML = '<div class="notice bad">' + esc(e.message) + '</div>'; }
   $("#create").disabled = false;
@@ -220,6 +235,7 @@ function sessCard(s) {
     '</div>';
   const acts = document.createElement("div"); acts.className = "acts";
   const b = (t, cls, fn) => { const x = document.createElement("button"); x.className = "btn sm " + cls; x.textContent = t; x.onclick = fn; acts.appendChild(x); return x; };
+  if (!finished && s.join_code && portalLink(s.join_code)) b("Portal link", "ghost", e => { navigator.clipboard && navigator.clipboard.writeText(portalLink(s.join_code)); e.target.textContent = "Link copied"; });
   if (!finished) {
     b("Message", "ghost", () => ask("Message to the educator", [["text", "Message", "text"]], v => cmd(s, "message", { text: v.text })));
     b("Stop", "ghost", () => ask("End the session early", [["reason", "Reason (tired, distressed, out of time…)", "text"]], v => cmd(s, "stop", { reason: v.reason || "stopped from admin device" })));

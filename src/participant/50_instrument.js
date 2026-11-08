@@ -77,7 +77,17 @@ const GAZE = (function () {
         if (orig) md.getUserMedia = share;
         const restore = () => { if (orig) md.getUserMedia = orig; };
         initPromise = Promise.resolve(wg.begin())
-          .then(r => { restore(); FACEQ.hook(); return r; }, e => { restore(); throw e; })
+          .then(r => {
+            restore(); FACEQ.hook();
+            /* v5.1: WebGazer's begin() trains the model on EVERY click and
+               mouse movement on the page by default. On this instrument the
+               clicks are the educator's (the "they are looking" button, the
+               answers), so each one taught the model that the child was
+               looking at the button. That alone ruins a calibration. Only the
+               explicit calibration samples below may train it. */
+            try { if (wg.removeMouseEventListeners) wg.removeMouseEventListeners(); EV.log("webgazer_mouse_training_off", {}); } catch (e) {}
+            return r;
+          }, e => { restore(); throw e; })
           .then(() => this.probe())
           .catch(e => { restore(); health = "dead"; this.healthReason = "begin_failed:" + (e && e.message ? e.message : e); return false; });
         return initPromise;
@@ -128,7 +138,7 @@ const GAZE = (function () {
     start(phase) {
       wg = lib(); if (!wg || health !== "live") return;
       buf = []; started = performance.now(); active = true; this.phase = phase || CUR_SCREEN.id;
-      this.lost = 0;
+      this.lost = 0; this.lostT = [];
       const self = this;
       EV.log("gaze_sampling_start", { phase: this.phase });
       try {
@@ -137,21 +147,23 @@ const GAZE = (function () {
           if (!active) return;
           const t = CLOCK.t();
           if (!d || !isFinite(d.x) || !isFinite(d.y)) {
-            self.lost++;
+            self.lost++; self.lostT.push(t);
             STREAMS.push("gaze", { t_perf:t, x:null, y:null, valid:false, screen_id:CUR_SCREEN.id, phase:self.phase });
             return;
           }
           const x = Math.round(d.x), y = Math.round(d.y);
+          self.last = { x, y, t_perf: t };
           buf.push({ x, y, t: Math.round(performance.now() - started), t_perf: t });
           STREAMS.push("gaze", { t_perf:t, x, y, valid:true, screen_id:CUR_SCREEN.id, phase:self.phase });
         });
       } catch (e) {}
     },
     sampling() { return active; },
+    lastPred() { return active ? this.last || null : null; },
 
     // Collect raw samples without zone analysis (used by validation).
     peek() { return buf.slice(); },
-    lostCount() { return this.lost || 0; },
+    lostCount(since) { return since === undefined ? (this.lost || 0) : (this.lostT || []).filter(t => t >= since).length; },
     /* Calibration training samples. WebGazer learns from each call. */
     train(x, y) {
       wg = lib(); if (!wg) return;
@@ -1046,6 +1058,7 @@ const INFO = {
 function showInfo(key) {
   const d = INFO[key]; if (!d) return;
   const b = $("#imodal-body"); b.innerHTML = "";
+  const onPortal = () => { try { return REMOTE.modal(b.innerHTML); } catch (e) { return false; } };
   b.appendChild(el("h3", { text: d.title }));
   b.appendChild(el("div", { class:"sub", text:"Why we ask this, and why we do not assume the answer" }));
   b.appendChild(el("h4", { text:"Why we ask" }));
@@ -1054,6 +1067,7 @@ function showInfo(key) {
   b.appendChild(el("p", { text:d.assume }));
   b.appendChild(el("h4", { text:"Evidence base" }));
   b.appendChild(el("p", { class:"cite", text:d.cite }));
+  if (onPortal()) return;   // v5.1: never on the child's screen while the portal has the controls
   b.appendChild(el("button", { class:"close", text:"Close", onclick:() => $("#imodal").classList.remove("on") }));
   $("#imodal").classList.add("on");
 }
@@ -1091,6 +1105,7 @@ function applyJoined(cfg) {
   S.consent.retention_until = cfg.retention_until || null;
   if (cfg.sync_flash === false) SYNC.enabled = false;
   EV.log("joined_admin_session", { join_code: cfg.join_code, session_id: cfg.session_id });
+  try { REMOTE.start(); } catch (e) {}   // v5.1: wait for the educator portal
 }
 add({ id:"connect", block:"admin", bar:"off",
   enter: () => { if (LINK.configured() && LINK.online() === null) LINK.ping().then(() => paint(), () => paint()); OUTBOX.refresh().then(() => paint()); },
@@ -1110,6 +1125,10 @@ add({ id:"connect", block:"admin", bar:"off",
     if (S.link.joined) {
       const c = S.link.admin_session;
       w.appendChild(el("div", { class:"notice ok", html:"<strong>Joined.</strong> " + c.mode + " session for child <strong>" + (c.child_id || "-") + "</strong>, educator " + (c.educator_id || "-") + ". Press Next." }));
+      let portal = false; try { portal = REMOTE.isOpen(); } catch (e) {}
+      w.appendChild(el("div", { class: "notice" + (portal ? " ok" : ""), html: portal
+        ? "<strong>Educator portal connected.</strong> From now on this laptop shows only what the child sees; the questions and buttons are on the portal."
+        : "<strong>Educator portal (optional):</strong> open the portal link from the admin console on the educator's phone, tablet or laptop and enter join code <strong>" + c.join_code + "</strong>. It connects by itself. Without it, the controls stay on this laptop." }));
       return w;
     }
     if (!LINK.configured()) {
@@ -2240,21 +2259,60 @@ function bsMedian() {
    re-calibrated offline with a better gaze model later: it is the single most
    valuable thing v5 adds. */
 const CAL_PTS = [[12,12],[50,12],[88,12],[12,50],[50,50],[88,50],[12,88],[50,88],[88,88]];
-const CAL_TRAIN_N = 5, CAL_TRAIN_GAP_MS = 120;
-function calNew() {
+/* v5.1: each dot is taught with up to 8 samples over at most 3 s, and a
+   sample is only taken when the face model sees the face, both eyes open and
+   the head roughly straight (FACEQ.usableNow). A dot with fewer than 4 clean
+   samples is not counted: the child is asked to look again. At least 7 of the
+   9 dots must be taught; the educator may skip a dot that will not work. */
+const CAL_TRAIN_N = 8, CAL_TRAIN_GAP_MS = 90, CAL_MAX_MS = 3000, CAL_MIN_GOOD = 4, CAL_MIN_POINTS = 7, CAL_AUTO_DWELL_MS = 1200;
+function calNew(keepModel) {
   S.calibration_attempts++;
-  S._calib = { attempt: S.calibration_attempts, order: shuffle(CAL_PTS.map((_, i) => i)), i: 0, done: 0, hit: {}, clicks: 0, busy: false, onsetFor: -1 };
-  EV.log("calibration_attempt_start", { attempt: S.calibration_attempts, order: S._calib.order });
+  S._calib = { attempt: S.calibration_attempts, order: shuffle(CAL_PTS.map((_, i) => i)), i: 0, done: 0, hit: {}, clicks: 0, busy: false, onsetFor: -1,
+    retries: {}, skipped: [], keep_model: !!keepModel, msg: null };
+  EV.log("calibration_attempt_start", { attempt: S.calibration_attempts, order: S._calib.order, keep_model: !!keepModel });
+}
+const calComplete = c => !!(c && c.i >= CAL_PTS.length && c.done >= CAL_MIN_POINTS);
+/* Automatic mode: the dot records itself once the child has looked at it for
+   CAL_AUTO_DWELL_MS and the face is usable. The educator still watches (on
+   the portal's video, or beside the child) and can press the button sooner. */
+let CAL_AUTO_T = null;
+function autoArm(fn, key) {
+  clearTimeout(CAL_AUTO_T);
+  if (!S._calAuto) return;
+  const t0 = performance.now();
+  const tryIt = () => {
+    if (!S._calAuto || CUR_SCREEN.id !== key.screen || key.still() === false) return;
+    if (FACEQ.usableNow().ok) { fn("auto"); return; }
+    if (performance.now() - t0 < 8000) CAL_AUTO_T = setTimeout(tryIt, 250);
+  };
+  CAL_AUTO_T = setTimeout(tryIt, CAL_AUTO_DWELL_MS);
+}
+const GATE_WORDS = { no_face: "no face in view", eyes_closed: "eyes closed or blinking", head_turned: "head turned away", no_recent_frame: "camera not updating" };
+/* A small live line on the educator panel: can the camera see the eyes right now? */
+function liveFaceLine() {
+  const n = el("div", { class: "notice", "data-livefa": "1", text: "Checking the face…" });
+  return n;
+}
+setInterval(() => {
+  const n = document.querySelector("#panel [data-livefa]"); if (!n) return;
+  const u = FACEQ.usableNow();
+  const t = !u.gated ? "Face check not available on this laptop; samples are not filtered." : u.ok ? "Camera sees the face and both eyes. Good." : "Not usable right now: " + (GATE_WORDS[u.why] || u.why) + ".";
+  if (n.textContent !== t) { n.textContent = t; n.className = "notice " + (u.ok ? "ok" : "bad"); }
+}, 300);
+function autoToggle() {
+  return el("button", { class: "opt" + (S._calAuto ? " on" : ""), onclick: () => { S._calAuto = !S._calAuto; log("gaze", "calibration_auto_mode", S._calAuto); paint(); } },
+    [el("span", { text: "Automatic: record each dot by itself" }), el("span", { class: "sub", text: "After the child has looked at it for about a second and the camera sees both eyes. You still watch, and can press the button sooner." })]);
 }
 add({ id:"calibrate", block:"gaze", bar:"off", skipIf: () => !gazeOn(),
-  enter: () => { if (!S._calib || S._calib.attempt === undefined) calNew(); say("Look at each dot when it appears, and keep looking until it goes away."); },
+  focus: () => !!(S._calib && S._calib.i < CAL_PTS.length),
+  enter: () => { if (!S._calib || S._calib.attempt === undefined) { calNew(S._calKeep); S._calKeep = false; } say("Look at each dot when it appears, and keep looking until it goes away."); },
   stageFn: () => {
-    const host = el("div", { style:"position:relative;width:100%;height:100%;min-height:420px" });
+    const host = el("div", { class: "dothost" });
     const c = S._calib;
     if (c && c.i < CAL_PTS.length) {
       const pi = c.order[c.i], p = CAL_PTS[pi];
       const dot = el("button", { class:"ctarget", style:`left:${p[0]}%;top:${p[1]}%`, "aria-label":"Calibration point " + (c.i + 1) + " of 9",
-        onclick:() => calRecord() });
+        onclick:() => calRecord("dot_click") });
       host.appendChild(dot);
       if (c.onsetFor !== c.i) {
         c.onsetFor = c.i;
@@ -2262,25 +2320,46 @@ add({ id:"calibrate", block:"gaze", bar:"off", skipIf: () => !gazeOn(),
           c.onset_t_perf = CLOCK.fromPerf(rt);
           const r = dot.getBoundingClientRect();
           c.target = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-          EV.log("calibration_target_onset", { attempt:c.attempt, point:pi, order:c.i, x:Math.round(c.target.x), y:Math.round(c.target.y) }, c.onset_t_perf);
+          EV.log("calibration_target_onset", { attempt:c.attempt, point:pi, order:c.i, x:Math.round(c.target.x), y:Math.round(c.target.y), retry: c.retries[pi] || 0 }, c.onset_t_perf);
+          if (GAZE.sampling()) GAZE.stop();
           GAZE.start("calibration");
           requestAnimationFrame(() => dot.classList.add("shrunk"));
+          const order = c.i;
+          c.armedFor = S._calAuto ? order : null;
+          autoArm(calRecord, { screen: "calibrate", still: () => S._calib === c && c.i === order && !c.busy });
         });
-      } else dot.classList.add("shrunk");
+      } else {
+        dot.classList.add("shrunk");
+        // automatic mode switched on while this dot was already showing
+        if (S._calAuto && c.armedFor !== c.i && !c.busy) { const order = c.i; c.armedFor = order;
+          autoArm(calRecord, { screen: "calibrate", still: () => S._calib === c && c.i === order && !c.busy }); }
+      }
     }
     stage(host, "Calibration, the child looks at each dot as it appears");
   },
   panel: () => {
     const w = el("div", { class:"wrap" });
-    const c = S._calib || { i:0, attempt:1 };
-    w.appendChild(el("div", { class:"eyebrow", text:"Calibration · attempt " + c.attempt + " of " + (1 + PROTOCOL.max_recalibrations) }));
+    const c = S._calib || { i:0, attempt:1, done:0, retries:{}, skipped:[] };
+    w.appendChild(el("div", { class:"eyebrow", text:"Calibration · attempt " + c.attempt + " of " + (1 + PROTOCOL.max_recalibrations) + (c.keep_model ? " · adding to the earlier one" : "") }));
     w.appendChild(el("h1", { text:"Teach the camera" }));
-    w.appendChild(el("p", { class:"lede", text:"One dot appears at a time. When the child is looking straight at it, press the button below (or click the dot, or press the space bar). It moves on by itself." }));
+    w.appendChild(el("p", { class:"lede", text:"One dot at a time. When the child is looking straight at it, press the button (or the space bar). Ask them to keep looking until it moves: it takes about a second." }));
     if (c.i < CAL_PTS.length) {
-      w.appendChild(el("button", { class:"btn", style:"width:100%", text: c.busy ? "Recording…" : "They are looking at the dot", onclick:() => calRecord() }));
-      KEYS.set({ " ": () => calRecord() });
+      w.appendChild(el("button", { class:"btn", style:"width:100%", text: c.busy ? "Recording… keep looking" : "They are looking at the dot", onclick:() => calRecord("educator") }));
+      KEYS.set({ " ": () => calRecord("educator") });
+      w.appendChild(liveFaceLine());
+      if (c.msg) {
+        w.appendChild(el("div", { class:"notice bad", text:c.msg }));
+        w.appendChild(el("button", { class:"speak", text:"Skip this dot", onclick:() => calSkipPoint() }));
+      }
     }
-    w.appendChild(el("div", { class:"notice", text: Math.min(c.i, 9) + " of 9 done. If the child will not look, or seems uncomfortable, press Skip eye tracking below; the rest of the study (and the video) is unaffected." }));
+    const retried = Object.values(c.retries || {}).reduce((a, b) => a + b, 0);
+    w.appendChild(el("div", { class:"notice", text: c.done + " of 9 taught" + (retried ? " · " + retried + " looked at again" : "") + ((c.skipped || []).length ? " · " + c.skipped.length + " skipped" : "") +
+      ". At least " + CAL_MIN_POINTS + " are needed. If the child will not look, or seems uncomfortable, press Skip eye tracking below; the rest of the study (and the video) is unaffected." }));
+    if (c.i >= CAL_PTS.length && c.done < CAL_MIN_POINTS) {
+      w.appendChild(el("div", { class:"notice bad", text:"Too few dots were taught for a usable model." }));
+      if (attemptsLeft() > 0) w.appendChild(el("button", { class:"btn", style:"width:100%", text:"Start the dots again", onclick:() => { GAZE.resetModel(); calNew(false); paint(); } }));
+    }
+    w.appendChild(autoToggle());
     w.appendChild(el("button", { class:"speak", text:"Skip eye tracking", onclick:() => {
       GAZE.consent = "declined"; S.gaze_off = true; log("gaze","calibration","skipped", { attempt: c.attempt });
       try { GAZE.stop(); } catch (e) {}
@@ -2289,41 +2368,76 @@ add({ id:"calibrate", block:"gaze", bar:"off", skipIf: () => !gazeOn(),
     return w;
   },
   info: "calibrate",
-  onLeave: () => { GAZE.calibrated = !!(S._calib && S._calib.done >= 9);
+  onLeave: () => { clearTimeout(CAL_AUTO_T); GAZE.calibrated = calComplete(S._calib);
     if (GAZE.sampling()) GAZE.stop();
     if (GAZE.calibrated) FACEQ.setBaseline(viewingDistanceCm().cm);
     log("gaze","calibration", GAZE.calibrated ? "complete" : "partial",
       { attempt: S._calib ? S._calib.attempt : null, points_done: S._calib ? S._calib.done : 0, points_total: 9,
-        order: S._calib ? S._calib.order : null, health: GAZE.health(), interocular_baseline: FACEQ.baseline() }); },
-  valid: () => !!(S._calib && S._calib.done >= 9)
+        points_skipped: S._calib ? S._calib.skipped : null, retries: S._calib ? S._calib.retries : null, keep_model: S._calib ? S._calib.keep_model : null,
+        auto_mode: !!S._calAuto, order: S._calib ? S._calib.order : null, health: GAZE.health(), interocular_baseline: FACEQ.baseline() }); },
+  valid: () => calComplete(S._calib)
 });
-function calRecord() {
+function calSkipPoint() {
+  const c = S._calib; if (!c || c.busy || c.i >= CAL_PTS.length) return;
+  const pi = c.order[c.i];
+  c.skipped.push(pi); c.i++; c.msg = null; c.target = null;
+  EV.log("calibration_target_skipped", { attempt: c.attempt, point: pi });
+  if (GAZE.sampling()) GAZE.stop();
+  paint();
+}
+function calRecord(source) {
   const c = S._calib; if (!c || c.busy || c.i >= CAL_PTS.length || !c.target) return;
-  c.busy = true; paint();
-  const pi = c.order[c.i], target = c.target, click = CLOCK.t();
-  EV.log("calibration_target_click", { attempt:c.attempt, point:pi, order:c.i }, click);
-  const trainT = [];
-  let k = 0;
+  clearTimeout(CAL_AUTO_T);
+  c.busy = true; c.msg = null; paint();
+  const pi = c.order[c.i], target = c.target, click = CLOCK.t(), t0 = performance.now();
+  EV.log("calibration_target_click", { attempt:c.attempt, point:pi, order:c.i, source: source || "educator" }, click);
+  const trainT = [], rejected = {};
+  let good = 0, gated = true;
   const tick = () => {
-    GAZE.train(target.x, target.y); trainT.push(CLOCK.t());
-    if (++k < CAL_TRAIN_N) { setTimeout(tick, CAL_TRAIN_GAP_MS); return; }
+    if (S._calib !== c) return;                  // left the screen or restarted mid-dot
+    const u = FACEQ.usableNow();
+    gated = gated && u.gated;
+    if (u.ok) { GAZE.train(target.x, target.y); trainT.push(CLOCK.t()); good++; }
+    else rejected[u.why] = (rejected[u.why] || 0) + 1;
+    if (good < CAL_TRAIN_N && performance.now() - t0 < CAL_MAX_MS) { setTimeout(tick, CAL_TRAIN_GAP_MS); return; }
     const off = CLOCK.t();
     const samples = GAZE.peek();
     GAZE.stop();
     const med = a => { if (!a.length) return null; const b = a.slice().sort((x, y) => x - y); return b[Math.floor(b.length / 2)]; };
     const mx = med(samples.map(q => q.x)), my = med(samples.map(q => q.y));
-    STREAMS.push("calibration", { attempt:c.attempt, kind:"calibration", point_index:pi, order:c.i,
+    const accepted = good >= CAL_MIN_GOOD;
+    STREAMS.push("calibration", { attempt:c.attempt, kind: accepted ? "calibration" : "calibration_retry", point_index:pi, order:c.i,
       target_x:Math.round(target.x), target_y:Math.round(target.y), onset_t_perf:c.onset_t_perf, click_t_perf:click, offset_t_perf:off,
       n_samples:samples.length, median_x:mx, median_y:my,
       error_px: mx === null ? null : Math.round(Math.hypot(mx - target.x, my - target.y)), error_deg:null,
-      samples_json: JSON.stringify({ predictions: samples.map(q => [q.x, q.y, q.t_perf]), training_t_perf: trainT }) });
-    EV.log("calibration_target_offset", { attempt:c.attempt, point:pi, order:c.i, training_samples: CAL_TRAIN_N }, off);
-    c.hit[pi] = true; c.done++; c.clicks++; c.i++; c.busy = false; c.target = null;
+      samples_json: JSON.stringify({ predictions: samples.map(q => [q.x, q.y, q.t_perf]), training_t_perf: trainT, trained: good,
+        gated, rejected_ticks: rejected, source: source || "educator", keep_model: c.keep_model }) });
+    EV.log("calibration_target_offset", { attempt:c.attempt, point:pi, order:c.i, training_samples: good, accepted, rejected_ticks: rejected }, off);
+    if (accepted) { c.hit[pi] = true; c.done++; c.i++; c.target = null; }
+    else {
+      c.retries[pi] = (c.retries[pi] || 0) + 1;
+      const top = Object.keys(rejected).sort((a, b) => rejected[b] - rejected[a])[0];
+      c.msg = "That dot did not count: the camera could not see the eyes clearly enough (" + (GATE_WORDS[top] || top || "unknown") +
+        "). Ask the child to look at the dot again, eyes open, head still, and press the button again.";
+      c.onsetFor = -1;                               // the dot re-appears large, which also re-catches attention
+    }
+    c.clicks++; c.busy = false;
     paint();
   };
   tick();
 }
 
+/* The dot the child should be looking at right now, for the portal's map. */
+function currentGazeTarget() {
+  const id = CUR_SCREEN.id || "";
+  let n = null, kind = null, busy = false;
+  if (id === "calibrate" && S._calib) { n = document.querySelector("#stage .ctarget"); kind = "calibration"; busy = !!S._calib.busy; }
+  else if (id === "validate" && S._val) { n = document.querySelectorAll("#stage .valdot")[S._val.i]; kind = "validation"; busy = !!S._val.busy; }
+  else if (/^drift_/.test(id) && S._drift) { n = document.querySelector("#stage .valdot"); kind = "drift"; busy = !!S._drift.busy; }
+  if (!n) return null;
+  const r = n.getBoundingClientRect();
+  return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), kind, busy };
+}
 /* ---------------------------------------------------------- validation */
 /* Calibration says a model was fitted. Validation says how good it is, for
    this student, in this room. Five targets the model was never trained on;
@@ -2348,10 +2462,15 @@ function pxPerDegree() {
 const attemptsLeft = () => (1 + PROTOCOL.max_recalibrations) - S.calibration_attempts;
 /* Recalibration: a fresh model, a fresh validation, then back to where it was
    asked for (the validation screen itself, or a drift check later on). */
-function recalibrate(returnTo) {
+function recalibrate(returnTo, fresh) {
   if (attemptsLeft() <= 0) return;
-  log("gaze", "recalibration_requested", S.calibration_attempts, { from: CUR_SCREEN.id, return_to: returnTo || null });
-  GAZE.resetModel();
+  log("gaze", "recalibration_requested", S.calibration_attempts, { from: CUR_SCREEN.id, return_to: returnTo || null, fresh: !!fresh });
+  /* v5.1: by default the earlier clean samples are kept and nine more are
+     added (more data helps this regression; a reset throws good samples away).
+     "From scratch" is for when the setup changed: the child moved seats, the
+     screen was tilted, the lights changed. */
+  if (fresh) GAZE.resetModel(); else { GAZE.calibrated = false; GAZE.validation = null; }
+  S._calKeep = !fresh;
   S._calib = null; S._val = { i:0, pts:[] }; S._returnTo = returnTo || null;
   if (returnTo && S._drift) S._drift[returnTo] = null;
   jumpTo("calibrate");
@@ -2365,9 +2484,10 @@ function skipGaze(where) {
   jumpTo("gaze_read");
 }
 add({ id:"validate", block:"gaze", bar:"off", skipIf: () => !(gazeOn() && GAZE.calibrated),
+  focus: () => !!(S._val && S._val.i < VAL_PTS.length),
   enter: () => { if (!S._val) S._val = { i: 0, pts: [] }; say("A few more dots. Look at each one until it turns green."); },
   stageFn: () => {
-    const host = el("div", { style:"position:relative;width:100%;height:100%;min-height:420px" });
+    const host = el("div", { class:"dothost" });
     VAL_PTS.forEach((p, i) => {
       const done = i < S._val.i;
       host.appendChild(el("div", { class:"valdot" + (done ? " done" : ""),
@@ -2377,7 +2497,12 @@ add({ id:"validate", block:"gaze", bar:"off", skipIf: () => !(gazeOn() && GAZE.c
     if (S._val.i < VAL_PTS.length && S._val.onsetFor !== S._val.i) {
       S._val.onsetFor = S._val.i;
       requestAnimationFrame(rt => { S._val.onset = CLOCK.fromPerf(rt);
-        EV.log("validation_target_onset", { attempt: S.calibration_attempts, index: S._val.i }, S._val.onset); });
+        EV.log("validation_target_onset", { attempt: S.calibration_attempts, index: S._val.i }, S._val.onset);
+        const v = S._val, i = v.i; v.armedFor = S._calAuto ? i : null;
+        autoArm(measureValPoint, { screen: "validate", still: () => S._val === v && v.i === i && !v.busy }); });
+    } else if (S._val.i < VAL_PTS.length && S._calAuto && S._val.armedFor !== S._val.i && !S._val.busy) {
+      const v = S._val, i = v.i; v.armedFor = i;
+      autoArm(measureValPoint, { screen: "validate", still: () => S._val === v && v.i === i && !v.busy });
     }
     stage(host, "Checking how accurate the camera is for this student");
   },
@@ -2390,9 +2515,11 @@ add({ id:"validate", block:"gaze", bar:"off", skipIf: () => !(gazeOn() && GAZE.c
       w.appendChild(el("p", { class:"lede", text:"Ask the child to look at the red dot. When they are looking at it, press the button below and keep them looking for a moment." }));
       w.appendChild(el("div", { class:"notice", text:"Dot " + (n + 1) + " of " + VAL_PTS.length + ". Unlike calibration, these dots do not teach the camera anything; they test what it already learned." }));
       w.appendChild(el("button", { class:"btn", style:"width:100%",
-        text: S._val.busy ? "Measuring…" : "They are looking at the dot",
-        onclick: () => measureValPoint() }));
-      KEYS.set({ " ": () => measureValPoint() });
+        text: S._val.busy ? "Measuring… keep looking" : "They are looking at the dot",
+        onclick: () => measureValPoint("educator") }));
+      KEYS.set({ " ": () => measureValPoint("educator") });
+      w.appendChild(liveFaceLine());
+      w.appendChild(autoToggle());
     } else {
       const v = GAZE.validation;
       const pass = v && v.meets_protocol;
@@ -2404,8 +2531,13 @@ add({ id:"validate", block:"gaze", bar:"off", skipIf: () => !(gazeOn() && GAZE.c
               : "<strong>Does not meet the rule.</strong>") }));
       if (!pass) {
         if (attemptsLeft() > 0) {
-          w.appendChild(el("button", { class:"btn", style:"width:100%;margin-bottom:8px", text:"Recalibrate (" + attemptsLeft() + " attempt" + (attemptsLeft() > 1 ? "s" : "") + " left)", onclick:() => recalibrate(null) }));
-          w.appendChild(el("p", { class:"hint", text:"Before recalibrating: check the framing (face in the middle, not backlit), and ask the child to keep their head still." }));
+          w.appendChild(el("button", { class:"btn", style:"width:100%;margin-bottom:8px", text:"Add more calibration dots (" + attemptsLeft() + " attempt" + (attemptsLeft() > 1 ? "s" : "") + " left)", onclick:() => recalibrate(null, false) }));
+          w.appendChild(el("button", { class:"speak", text:"Start calibration again from scratch", onclick:() => recalibrate(null, true) }));
+          w.appendChild(el("p", { class:"hint", text:"Add more dots keeps what the camera has learned and teaches nine more: usually best. Start from scratch if the child changed seat or the screen or lights were moved. Before either: check the face is inside the oval on the portal video, not backlit, and ask the child to keep their head still." }));
+          if (v && v.per_point_error_px) {
+            const worst = v.per_point_error_px.indexOf(Math.max.apply(null, v.per_point_error_px));
+            w.appendChild(el("p", { class:"hint", text:"Per-dot error (px): " + v.per_point_error_px.join(", ") + ". Worst: dot " + (worst + 1) + "." }));
+          }
         } else {
           w.appendChild(el("div", { class:"notice", text:"The recalibration limit is reached. Press Next: eye tracking is switched off for the rest of this session, as the protocol says. The video keeps recording, so the session can still be re-analysed later." }));
         }
@@ -2437,8 +2569,9 @@ add({ id:"validate", block:"gaze", bar:"off", skipIf: () => !(gazeOn() && GAZE.c
 function driftScreen(id, before) {
   add({ id, block:"gaze", bar:"off", skipIf: () => !(gazeOn() && GAZE.calibrated),
     enter: () => { S._drift = S._drift || {}; say("Look at the dot in the middle."); },
+    focus: () => !(S._drift && S._drift[id]),
     stageFn: () => {
-      const host = el("div", { style:"position:relative;width:100%;height:100%;min-height:420px" });
+      const host = el("div", { class:"dothost" });
       host.appendChild(el("div", { class:"valdot", style:"left:50%;top:50%", "aria-hidden":"true" }));
       stage(host, "Quick check before " + before);
       if (!S._drift[id + "_onset"]) requestAnimationFrame(rt => { S._drift[id + "_onset"] = CLOCK.fromPerf(rt); EV.log("drift_target_onset", { check:id }, S._drift[id + "_onset"]); });
@@ -2450,13 +2583,14 @@ function driftScreen(id, before) {
       w.appendChild(el("h1", { text:"Still accurate?" }));
       if (!d) {
         w.appendChild(el("p", { class:"lede", text:"Ask the child to look at the dot in the middle, then press the button and keep them looking for a second." }));
-        w.appendChild(el("button", { class:"btn", style:"width:100%", text: S._drift.busy ? "Measuring…" : "They are looking at the dot", onclick:() => measureDrift(id) }));
+        w.appendChild(el("button", { class:"btn", style:"width:100%", text: S._drift.busy ? "Measuring… keep looking" : "They are looking at the dot", onclick:() => measureDrift(id) }));
         KEYS.set({ " ": () => measureDrift(id) });
+        w.appendChild(liveFaceLine());
       } else {
         const over = d.offset_deg === null || d.offset_deg > PROTOCOL.drift_max_deg;
         w.appendChild(el("div", { class: over ? "notice bad" : "notice ok", text: d.offset_deg === null ? "No gaze estimate arrived." :
           "Drift " + d.offset_px + " px (" + d.offset_deg + "°). Limit " + PROTOCOL.drift_max_deg + "°. " + (over ? "Above the limit." : "Fine, carry on.") }));
-        if (over && attemptsLeft() > 0) w.appendChild(el("button", { class:"btn", style:"width:100%;margin-bottom:8px", text:"Quick recalibration", onclick:() => { d.action = "recalibrate"; S.drift.push(Object.assign({}, d)); recalibrate(id); } }));
+        if (over && attemptsLeft() > 0) w.appendChild(el("button", { class:"btn", style:"width:100%;margin-bottom:8px", text:"Quick recalibration (adds nine dots)", onclick:() => { d.action = "recalibrate"; S.drift.push(Object.assign({}, d)); recalibrate(id, false); } }));
         if (over) w.appendChild(el("p", { class:"hint", text:"Or press Next to continue as is. Either way it is recorded, and the drift travels with every gaze row of the next block." }));
         w.appendChild(el("button", { class:"speak", text:"Measure again", onclick:() => { S._drift[id] = null; paint(); } }));
       }
@@ -2480,7 +2614,9 @@ function measureDrift(id) {
   S._drift.busy = true; paint();
   GAZE.start("drift");
   setTimeout(() => {
-    const sm = GAZE.peek(), lost = GAZE.lostCount(); GAZE.stop();
+    // v5.1: the first 350 ms after the button are the eyes landing and the
+    // tracker's smoothing catching up; they measure lag, not drift.
+    const sm = GAZE.peek().filter(q => q.t_perf >= click + VAL_SETTLE_MS), lost = GAZE.lostCount(click + VAL_SETTLE_MS); GAZE.stop();
     const med = a => { if (!a.length) return null; const b = a.slice().sort((x, y) => x - y); return b[Math.floor(b.length / 2)]; };
     const mx = med(sm.map(q => q.x)), my = med(sm.map(q => q.y));
     const px = mx === null ? null : Math.round(Math.hypot(mx - target.x, my - target.y));
@@ -2493,12 +2629,17 @@ function measureDrift(id) {
       n_samples:sm.length, median_x:mx, median_y:my, error_px:px, error_deg:S._drift[id].offset_deg,
       samples_json: JSON.stringify(sm.map(q => [q.x, q.y, q.t_perf])) });
     S._drift.busy = false; paint();
-  }, 1000);
+  }, VAL_SETTLE_MS + 1200);
 }
 
-/* Collect ~1.2s of predictions against the current target, then advance. */
-function measureValPoint() {
+/* Collect predictions against the current target, then advance. v5.1: the
+   first VAL_SETTLE_MS after the button are dropped (the eyes landing on the
+   dot and the tracker's smoothing catching up are lag, not inaccuracy), then
+   1.5 s is measured. Samples with no face count as lost. */
+const VAL_SETTLE_MS = 350, VAL_WINDOW_MS = 1500;
+function measureValPoint(source) {
   if (S._val.busy) return;
+  clearTimeout(CAL_AUTO_T);
   const i = S._val.i;
   const host = $("#stage .valdot");
   const dots = document.querySelectorAll("#stage .valdot");
@@ -2507,11 +2648,11 @@ function measureValPoint() {
   const r = node.getBoundingClientRect();
   const target = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
   const clickT = CLOCK.t();
-  EV.log("validation_target_measure", { index: i, x: Math.round(target.x), y: Math.round(target.y) }, clickT);
+  EV.log("validation_target_measure", { index: i, x: Math.round(target.x), y: Math.round(target.y), source: source || "educator" }, clickT);
   S._val.busy = true; paint();
   GAZE.start("validation");
   setTimeout(() => {
-    const samples = GAZE.peek(), lost = GAZE.lostCount();
+    const samples = GAZE.peek().filter(q => q.t_perf >= clickT + VAL_SETTLE_MS), lost = GAZE.lostCount(clickT + VAL_SETTLE_MS);
     GAZE.stop();
     const med = a => { if (!a.length) return null; const b = a.slice().sort((x, y) => x - y); return b[Math.floor(b.length / 2)]; };
     const mx = med(samples.map(s => s.x)), my = med(samples.map(s => s.y));
@@ -2526,7 +2667,7 @@ function measureValPoint() {
     S._val.i++; S._val.busy = false;
     if (S._val.i >= VAL_PTS.length) computeValidation();
     paint();
-  }, 1200);
+  }, VAL_SETTLE_MS + VAL_WINDOW_MS);
 }
 function computeValidation() {
   const good = S._val.pts.filter(p => p.pred && p.n >= 5);
@@ -3757,6 +3898,9 @@ const KEYS = (function () {
   addEventListener("keydown", e => {
     if (/^(INPUT|TEXTAREA|SELECT)$/.test((e.target.tagName || "").toUpperCase())) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
+    // v5.1: with the portal in control, the child's keyboard does nothing.
+    if (document.body.classList.contains("remote")) { e.preventDefault(); return; }
+    if (document.body.classList.contains("focus") && e.key === "Escape") { S._focusOff = true; paint(); e.preventDefault(); return; }
     if ($("#imodal").classList.contains("on")) {
       if (e.key === "Escape") { $("#imodal").classList.remove("on"); e.preventDefault(); }
       return;
@@ -3765,7 +3909,12 @@ const KEYS = (function () {
     if (e.key === "ArrowRight" || e.key === "Enter") { if (!$("#next").disabled && !$("#next").classList.contains("hide")) { go(1); e.preventDefault(); } }
     if (e.key === "ArrowLeft") { if (!$("#back").disabled) { go(-1); e.preventDefault(); } }
   });
-  return { set(m) { map = m || {}; }, clear() { map = {}; } };
+  function press(k) {
+    if (map[k]) { map[k](); return; }
+    if (k === "ArrowRight" || k === "Enter") { if (!$("#next").disabled && !$("#next").classList.contains("hide")) go(1); }
+    if (k === "ArrowLeft") { if (!$("#back").disabled) go(-1); }
+  }
+  return { set(m) { map = m || {}; }, clear() { map = {}; }, press };
 })();
 
 /* =========================================================================
@@ -3799,6 +3948,7 @@ function saveBackup() {
       // v5
       v5: { link: S.link, consent: S.consent, video: S.video, physical: S.physical, framing: S.framing, drift: S.drift,
         calibration_attempts: S.calibration_attempts, breaks: S.breaks, validations: S.validations || [],
+        preview: S.preview || null, remote: S.remote || null, cal_auto: !!S._calAuto,
         started_at: S.started_at, session_time_origin_ms: CLOCK.origin, clock_epochs: CLOCK.epochs,
         segments: REC.segments, frame_index: FRAMES.current(), cam_setup: S._camSetup || null, started: !!S._started, bs: S._bs || null, drift_state: S._drift || null }
     }));
@@ -3826,7 +3976,8 @@ function restoreBackup(b) {
   GAZE.validation = b.validation || null;
   GAZE.calibrated = !!(b.calib && b.calib.done >= 9);
   const v = b.v5 || {};
-  ["link","consent","video","physical","framing","drift","breaks","validations"].forEach(k => { if (v[k] !== undefined) S[k] = v[k]; });
+  ["link","consent","video","physical","framing","drift","breaks","validations","preview","remote"].forEach(k => { if (v[k] !== undefined && v[k] !== null) S[k] = v[k]; });
+  S._calAuto = !!v.cal_auto;
   S.calibration_attempts = v.calibration_attempts || 0;
   if (v.started_at) S.started_at = v.started_at;
   if (v.session_time_origin_ms) CLOCK.resume(v.session_time_origin_ms, v.clock_epochs);
@@ -3863,6 +4014,7 @@ async function resumeV5() {
   await sessionStarted();
   const salvaged = await REC.salvage(S.session_id, S._resumeSegments || []);
   EV.log("session_resumed", { rows_batches_restored: n, video_parts_salvaged: salvaged });
+  if (S.link.joined) { try { REMOTE.start(); } catch (e) {} }
   if (S.video.consented && !S.video.deleted && S._camSetup === "open") {
     const ok = await CAM.open();
     if (ok) { await REC.start(S.session_id, "resume_after_reload"); await SYNC.flash("recording_resume"); }
@@ -3935,6 +4087,10 @@ function paint() {
   $("#next").classList.toggle("hide", !!s.last);
   $("#stop").classList.toggle("hide", !(S.mode === "child" && !s.last && S._started));
   validate();
+  // v5.1: dots full screen (no educator panel beside them) while targets remain
+  document.body.classList.toggle("focus", !!(s.focus && s.focus() && !S._focusOff));
+  try { REMOTE.afterPaint(); } catch (e) {}
+  try { PREVIEW.paintButton(); } catch (e) {}
   announce("Screen " + (idx + 1) + " of " + list.length);
 }
 /* Annexure 2 (2.2) and the educator briefing both tell the student that no
@@ -3972,6 +4128,7 @@ function leaving(s) {
 }
 function entering(n, how) {
   CUR_SCREEN = { id: n.id, block: n.block || null };
+  S._focusOff = false;
   HOVER.reset();
   EV.log("screen_enter", { screen: n.id, index: idx + 1, how });
   try { REC.onScreen(n.block || null); } catch (e) {}

@@ -29,11 +29,11 @@ v4.2 was built against Annexure 2 and **collected less** than it was consented f
 - the retention period
 - who holds the Drive account
 
-If Drive is not approved, use the local server (`backend/glide_local_server.py`) and the institute's approved storage instead. The folder layout is identical.
+If Drive is not approved, use the local server (`backend/local_server/glide_local_server.py`) and the institute's approved storage instead. The folder layout is identical.
 
 ## 3. Pre-declared exclusion rules (write into the protocol before collection)
 
-These are fixed in the instrument (`PROTOCOL` in `src/app/20_camera.js`) and written into every session's `manifest.json`:
+These are fixed in the instrument (`PROTOCOL` in `src/participant/20_camera.js`) and written into every session's `manifest.json`:
 
 | Rule | Value |
 |---|---|
@@ -54,3 +54,11 @@ If any value changes, change it **before** the first real session, rebuild, and 
 - One white flash at the start and end of recording (sync marker). It can be turned off per session.
 - A new educator item: how much the student moved during the camera parts.
 - Session length is unchanged in practice: about 3 extra minutes with video and eye tracking (card, framing, distance, drift dots).
+
+## 5. v5.1 additions
+
+| | What | Protocol note |
+|---|---|---|
+| **Live view on the educator's device** | With the educator portal, the special educator sees the live camera image on a second study device (phone, tablet or laptop) to help the student stay in frame. It goes directly between the two devices, encrypted (WebRTC), is **not recorded** on that device, and is shown only once the camera is on, which happens only after consent. | Add: *"During the session the special educator may view the live camera image on a second study device to help the student stay in frame; this live view is not recorded."* Name the devices (study-owned, not personal, if the protocol requires). |
+| **Camera picture on the child's screen** | Optional and educator-controlled: off, only when the face leaves the frame (default), or always. Every appearance is logged with its reason and duration. | The assent already tells the student the camera is on. Optionally add that they may see their own picture if they move out of view. |
+| **Calibration quality gate** | Calibration samples are taken only when the face model sees both eyes open. Mouse clicks no longer train the gaze model. | No consent change. If the protocol describes the calibration procedure, update it: "at least 7 of 9 points, each with at least 4 clean samples". |

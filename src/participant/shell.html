@@ -208,6 +208,30 @@ body.child .infobtn{width:32px;height:32px;font-size:17px}
 .big-code{font-family:var(--mono);font-size:34px;letter-spacing:.25em;text-transform:uppercase}
 input.codein{font-family:var(--mono);font-size:26px;letter-spacing:.3em;text-transform:uppercase;text-align:center}
 
+/* ---------------- v5.1: educator portal, focus mode, camera preview ---------------- */
+/* With the educator portal connected the laptop is the child's screen only:
+   no questions, no buttons, no status bar. */
+body.remote #right,body.focus #right{display:none}
+body.remote #left,body.focus #left{flex:1 1 100%;border-right:none}
+body.remote #bar,body.focus #bar{display:none}
+body.focus #stage,body.remote #stage{padding:14px}
+.dothost{position:relative;width:100%;flex:1;min-height:420px}
+#rbanner{position:fixed;left:50%;top:6px;transform:translateX(-50%);z-index:91;background:#5C6670;color:#fff;font-family:var(--mono);
+  font-size:11px;padding:4px 10px;border-radius:10px;display:none}
+#rbanner.on{display:block}
+/* Local mode, dots full screen: a quiet line for the educator at the very bottom. */
+#focushint{position:fixed;left:50%;bottom:8px;transform:translateX(-50%);z-index:60;display:none;gap:10px;align-items:center;
+  font-family:var(--mono);font-size:11px;color:#8A949E}
+body.focus:not(.remote) #focushint{display:flex}
+#focushint button{border:1px solid #CFD6DC;background:transparent;color:#5C6670;font-family:var(--mono);font-size:11px;padding:3px 9px}
+/* Camera preview on the child's screen (PREVIEW): small, bottom left, mirrored. */
+#pip{position:fixed;left:12px;bottom:12px;width:min(22vw,240px);aspect-ratio:4/3;z-index:80;background:#000;border:3px solid #fff;
+  box-shadow:0 2px 10px rgba(0,0,0,.35);display:none;overflow:hidden;border-radius:6px}
+#pip.on{display:block}
+#pip video,#pip canvas{position:absolute;inset:0;width:100%;height:100%}
+#pip video{object-fit:cover;transform:scaleX(-1)}
+#pvbtn{font-size:12px;padding:7px 10px}
+
 /* screen-reader-only live region */
 .sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 </style>
@@ -217,6 +241,8 @@ input.codein{font-family:var(--mono);font-size:26px;letter-spacing:.3em;text-tra
 <div class="sr" id="live" aria-live="polite"></div>
 <div id="recind" role="status" aria-live="polite"><i></i><span>Recording video</span></div>
 <div id="syncflash" aria-hidden="true"></div>
+<div id="rbanner" role="status" aria-live="polite"></div>
+<div id="focushint"><span>Educator: press SPACE when the child is looking at the dot · Esc shows the controls</span><button type="button" onclick="KEYS.press(' ')">Looking now</button></div>
 <video id="camview" muted playsinline autoplay aria-hidden="true"></video>
 <div id="app">
   <section id="left" aria-label="What the child sees">
@@ -228,6 +254,7 @@ input.codein{font-family:var(--mono);font-size:26px;letter-spacing:.3em;text-tra
     <div id="foot">
       <button class="btn ghost" id="back">Back</button>
       <div class="prog"><span id="ptxt"></span><div class="bar"><div id="pbar" style="width:0%"></div></div></div>
+      <button class="btn ghost hide" id="pvbtn" title="Show the camera picture on this screen: auto = only when the face leaves the frame">Camera preview: auto</button>
       <button class="btn" id="next">Next</button>
       <button class="btn stop hide" id="stop">Stop now</button>
     </div>

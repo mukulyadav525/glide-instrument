@@ -2,7 +2,9 @@
 __pycache__/
 node_modules/
 # local backend data and keys: never commit study data
-source/backend/local_drive/
+backend/local_server/local_drive/
 local_drive/
+GLIDE_Study_Data/
 keys.json
 state.json
+*.webm

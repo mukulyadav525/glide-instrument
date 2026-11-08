@@ -6,6 +6,9 @@
      - keeps a registry sheet of every session
      - relays the admin device <-> participant laptop link (join codes,
        heartbeats, Stop / Withdraw / Message commands)
+     - passes the two connection offers between the participant laptop and
+       the educator portal (op "signal"); the live video and the controls
+       then go directly between those two devices, never through here
      - receives every file the instrument uploads, checks its SHA-256 and
        files it under participants/<child>/<mode>/<date>_<session>/
 
@@ -23,7 +26,7 @@
    then refused unless it carries one of the two keys.
    ========================================================================= */
 
-var VERSION = "glide-backend-5.0.0";
+var VERSION = "glide-backend-5.1.0";
 var ROOT_NAME = "GLIDE_Study_Data";
 var REG_HEADERS = ["session_id","created_at","source","mode","child_id","educator_id","join_code","capacity",
   "consent_form_version","guardian_main","guardian_gaze","guardian_video","retention_until",
@@ -85,6 +88,8 @@ function doPost(e) {
       case "ack":            out = ack_(req.session_id, req.command_id); break;
       case "upload":         out = upload_(req); break;
       case "delete_video":   out = deleteVideo_(req.session || {}, req.reason || null, role); break;
+      case "edu_join":       out = eduJoin_(req.join_code); break;
+      case "signal":         out = signal_(req); break;
       default: return json_({ ok:false, error:"unknown_op" });
     }
     out.ok = true;
@@ -136,6 +141,36 @@ function join_(code) {
   var pub = {}; ["session_id","join_code","mode","child_id","educator_id","capacity","guardian_main","guardian_gaze","guardian_video",
     "consent_form_version","retention_until","sync_flash","date","created_at"].forEach(function (k) { pub[k] = s[k]; });
   return { session: pub };
+}
+/* v5.1 · educator portal. Looks a session up by its join code without
+   marking it joined (that is the participant laptop's act), so the portal can
+   be opened before, during or after the laptop joins. */
+function eduJoin_(code) {
+  code = String(code || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  var sid = PropertiesService.getScriptProperties().getProperty("join_" + code);
+  if (!sid) throw new Error("unknown_join_code");
+  var s = JSON.parse(PropertiesService.getScriptProperties().getProperty("sess_" + sid));
+  if (s.joined_at && (Date.now() - Date.parse(s.joined_at)) > 12 * 3600 * 1000) throw new Error("join_code_expired");
+  var pub = {}; ["session_id","join_code","mode","child_id","educator_id","guardian_gaze","guardian_video","date","created_at","joined_at"].forEach(function (k) { pub[k] = s[k]; });
+  return { session: pub, status: cacheGet_("st_" + sid) };
+}
+/* One mailbox per session and side ("laptop", "educator"), newest message
+   wins, kept 10 minutes. Messages are WebRTC offers/answers (a few kB). */
+function signal_(req) {
+  var sid = String(req.session_id || "");
+  if (!/^s[a-z0-9]{6,30}$/.test(sid)) throw new Error("bad_session_id");
+  if (!PropertiesService.getScriptProperties().getProperty("sess_" + sid)) throw new Error("unknown_session");
+  var c = CacheService.getScriptCache();
+  if (req.put) {
+    if (req.role !== "laptop" && req.role !== "educator") throw new Error("bad_role");
+    var m = req.put, txt = JSON.stringify({ type: String(m.type || ""), id: String(m.id || "").slice(0, 40), sdp: m.sdp ? String(m.sdp) : null, at: new Date().toISOString() });
+    if (txt.length > 90000) throw new Error("signal_too_large");
+    c.put("sig_" + sid + "_" + req.role, txt, 600);
+    return {};
+  }
+  if (req.get !== "laptop" && req.get !== "educator") throw new Error("bad_role");
+  var v = c.get("sig_" + sid + "_" + req.get);
+  return { msg: v ? JSON.parse(v) : null };
 }
 function heartbeat_(sid, st) {
   if (!/^s[a-z0-9]{6,30}$/.test(String(sid))) throw new Error("bad_session_id");

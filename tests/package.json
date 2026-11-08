@@ -7,7 +7,8 @@
     "withdraw": "node run.js withdraw",
     "crash": "node run.js crash",
     "educator": "node run.js educator",
-    "nocam": "node run.js nocam"
+    "nocam": "node run.js nocam",
+    "remote": "node run.js remote"
   },
   "dependencies": {
     "puppeteer-core": "23.11.1"

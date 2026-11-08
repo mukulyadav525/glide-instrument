@@ -1,5 +1,7 @@
 // GLIDE v5 headless end-to-end driver.
-// node run.js <scenario>   scenarios: full | withdraw | crash | educator | nocam
+// node run.js <scenario>   scenarios: full | withdraw | crash | educator | nocam | remote
+//   remote: a second tab opens the educator portal; once it connects, the
+//   whole session is driven from the portal and the laptop shows the child view only.
 const puppeteer = require("puppeteer-core");
 const fs = require("fs");
 const BASE = "http://localhost:8765";
@@ -41,15 +43,17 @@ async function main() {
     executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     headless: "new",
     args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required",
+           "--disable-features=WebRtcHideLocalIpsWithMdns,CalculateNativeWinOcclusion",
+           "--disable-background-timer-throttling", "--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding",
            "--window-size=1440,900", "--no-first-run", "--no-default-browser-check", "--mute-audio"],
     defaultViewport: { width: 1440, height: 900 },
-    userDataDir: process.env.PROFILE
+    userDataDir: process.env.PROFILE,
+    protocolTimeout: 60000
   });
   const page = await browser.newPage();
   const errors = [];
-  page.on("pageerror", e => errors.push("pageerror: " + e.message));
-  page.on("console", m => { if (m.type() === "error") errors.push("console: " + m.text()); });
-  page.on("dialog", async d => {
+  let drv = page;                       // the page whose #panel and #next are driven (the portal, in "remote")
+  const onDialog = pg => pg.on("dialog", async d => {
     const msg = d.message();
     if (d.type() === "confirm") { await d.accept(); return; }
     if (d.type() === "prompt") {
@@ -59,7 +63,16 @@ async function main() {
     }
     await d.accept();
   });
+  onDialog(page);
+  page.on("pageerror", e => errors.push("pageerror: " + e.message));
+  page.on("console", m => { if (m.type() === "error") errors.push("console: " + m.text()); });
   if (scenario !== "nocam") await page.evaluateOnNewDocument(GAZE_STUB);
+  /* The fake camera has no face, so the v5.1 face gate would refuse every
+     calibration sample. Replace it with one that refuses 15% of moments
+     (as blinks would), which also exercises the retry path. */
+  if (scenario !== "nocam") await page.evaluateOnNewDocument(() => {
+    const iv = setInterval(() => { try { if (typeof FACEQ !== "undefined") { FACEQ.usableNow = () => Math.random() < 0.15 ? { ok: false, gated: true, why: "eyes_closed" } : { ok: true, gated: true, why: "ok" }; clearInterval(iv); } } catch (e) {} }, 20);
+  });
 
   // admin creates the session
   const mode = scenario === "educator" ? "educator" : "child";
@@ -72,21 +85,49 @@ async function main() {
   await sleep(3500);
 
   const cur = () => page.evaluate(() => { const s = visible()[idx]; return s ? s.id : null; });
-  const nextEnabled = () => page.evaluate(() => !document.querySelector("#next").disabled && !document.querySelector("#next").classList.contains("hide"));
-  const next = async () => { await page.click("#next"); await sleep(250); };
+  const nextEnabled = () => drv.evaluate(() => !document.querySelector("#next").disabled && !document.querySelector("#next").classList.contains("hide"));
+  const next = async () => { await drv.click("#next"); await sleep(drv === page ? 250 : 600); };
   const clickText = async (txt, scope = "#panel", nth = 0) => {
-    const ok = await page.evaluate((txt, scope, nth) => {
+    const ok = await drv.evaluate((txt, scope, nth) => {
       const els = [...document.querySelectorAll(scope + " button")].filter(b => b.textContent.replace(/\s+/g, " ").includes(txt));
       if (!els[nth]) return false; els[nth].click(); return true;
     }, txt, scope, nth);
-    await sleep(120); return ok;
+    await sleep(drv === page ? 120 : 350); return ok;
   };
-  const key = async k => { await page.keyboard.press(k); await sleep(120); };
+  const key = async k => { await drv.keyboard.press(k); await sleep(drv === page ? 120 : 350); };
+  const pev = (fn, ...a) => drv.evaluate(fn, ...a);
+  const setLastText = v => pev(v => { const i = [...document.querySelectorAll("#panel input[type=text]")].pop(); i.value = v; i.dispatchEvent(new Event("input", { bubbles: true })); }, v);
   const waitValid = async (ms = 20000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (await nextEnabled()) return true; await sleep(250); } return false; };
+
+  let portal = null, remoteChecks = {};
+  async function openPortal() {
+    // A second window (own browser context), so both pages stay visible: a
+    // background tab is throttled and frozen, which a real second device is not.
+    const ctx = browser.createBrowserContext ? await browser.createBrowserContext() : await browser.createIncognitoBrowserContext();
+    portal = await ctx.newPage();
+    await portal.setViewport({ width: 1100, height: 820 });
+    onDialog(portal);
+    portal.on("pageerror", e => errors.push("portal pageerror: " + e.message));
+    portal.on("console", m => { if (m.type() === "error") errors.push("portal console: " + m.text()); });
+    await portal.goto(BASE + "/educator.html?api=" + encodeURIComponent(BASE + "/api") + "&k=" + encodeURIComponent(KEYS.DEVICE_KEY) + "&code=" + sess.join_code, { waitUntil: "load" });
+    const t0 = Date.now();
+    while (Date.now() - t0 < 40000) {
+      const ok = await portal.evaluate(() => document.querySelector("#conn").textContent === "connected").catch(() => false);
+      if (ok) break; await sleep(500);
+    }
+    await sleep(1500);
+    remoteChecks.connect_ms = Date.now() - t0;
+    remoteChecks.laptop_child_view = await page.evaluate(() => document.body.classList.contains("remote") && getComputedStyle(document.querySelector("#right")).display === "none");
+    remoteChecks.portal_has_panel = await portal.evaluate(() => !!document.querySelector("#panel [data-rid]"));
+    log("portal", JSON.stringify(remoteChecks));
+    if (remoteChecks.laptop_child_view && remoteChecks.portal_has_panel) drv = portal;
+    else log("PORTAL DID NOT TAKE OVER");
+  }
 
   let steps = 0, seen = [];
   const H = {
-    connect: async () => { await page.type("input.codein", sess.join_code); await clickText("Join session"); await sleep(1500); },
+    connect: async () => { await page.type("input.codein", sess.join_code); await clickText("Join session"); await sleep(1500);
+      if (scenario === "remote") await openPortal(); },
     mode: async () => { await clickText("Yes, can understand and decide"); },
     ascertain: async () => { await clickText("ADHD"); await clickText("Combined"); await clickText("Formal diagnostic report"); await clickText("Yes, I have it to hand"); await clickText("Within 12 months"); },
     card_match: async () => { await clickText("The box matches the card exactly"); },
@@ -94,16 +135,22 @@ async function main() {
     video_consent: async () => { await clickText("Yes, the student is happy with the video"); },
     cam_setup: async () => { await waitValid(20000); await sleep(1500); },
     framing: async () => { await sleep(1200); await clickText("Overhead lights only"); await clickText("Screen brightness is set to about half");
-      await page.evaluate(() => { const i = [...document.querySelectorAll("#panel input[type=text]")].pop(); i.value = "test: fake camera has no face"; i.dispatchEvent(new Event("input")); }); },
-    framing2: async () => { await sleep(800); await page.evaluate(() => { const i = [...document.querySelectorAll("#panel input[type=text]")].pop(); i.value = "test: fake camera"; i.dispatchEvent(new Event("input")); }); },
-    context: async () => { await page.select("#panel select", "Hindi"); await clickText("English"); await clickText("Fairly comfortable"); await clickText("No", "#panel", 0);
+      await setLastText("test: fake camera has no face"); },
+    framing2: async () => { await sleep(800); await setLastText("test: fake camera"); },
+    context: async () => { await drv.select("#panel select", "Hindi"); await clickText("English"); await clickText("Fairly comfortable"); await clickText("Yes, and they are wearing them now");
       await clickText("Within the last year"); await clickText("Mid-morning"); await clickText("Nothing unusual"); },
     comprehension: async () => { await key("1"); },
     gaze_consent: async () => { await clickText("Yes, that is okay"); await clickText("About 60 cm"); },
     gaze_check: async () => { await waitValid(20000); },
     distance: async () => { for (let i = 0; i < 3; i++) { await clickText("Start"); await sleep(2600); await clickText("Gone"); await sleep(300); } },
-    calibrate: async () => { for (let i = 0; i < 9; i++) { await sleep(500); await clickText("They are looking at the dot"); await sleep(900); } },
-    validate: async () => { for (let i = 0; i < 5; i++) { await clickText("They are looking at the dot"); await sleep(1500); } },
+    calibrate: async () => {
+      if (scenario === "remote") {   // the dots record themselves
+        const on = await pev(() => [...document.querySelectorAll("#panel .opt.on")].some(b => /Automatic/.test(b.textContent)));
+        if (!on) await clickText("Automatic: record each dot by itself");
+        await waitValid(60000); return; }
+      for (let i = 0; i < 20 && !(await nextEnabled()); i++) { await sleep(500); await clickText("They are looking at the dot"); await sleep(1300); } },
+    validate: async () => { if (scenario === "remote") { await waitValid(30000); return; }
+      for (let i = 0; i < 5; i++) { await clickText("They are looking at the dot"); await sleep(2000); } },
     gaze_read: async () => { await sleep(1500); await clickText("They have finished reading"); await clickText("Fine"); },
     apply: async () => { await clickText("The child is taking a break now"); await sleep(800); await clickText("Break over"); await sleep(1200);
       await clickText("They have finished reading"); await clickText("Fine"); },
@@ -114,10 +161,18 @@ async function main() {
     ed1: async () => { await clickText("14-15"); await clickText("At age level"); await clickText("5-15 min"); },
     ed_w: async () => {}, ed_w2: async () => {},
     ed_obs: async () => { await clickText("4"); await clickText("4", "#panel", 1); await clickText("Once or twice"); await clickText("Possibly"); await clickText("Some of the time"); await clickText("2", "#panel", 2); },
-    ed_pri: async () => { await page.evaluate(() => { document.querySelectorAll("#panel .q").forEach((q, i) => { const b = q.querySelectorAll("button")[i % 4]; if (b) b.click(); }); }); await sleep(200); }
+    ed_pri: async () => { await pev(() => { document.querySelectorAll("#panel .q").forEach((q, i) => { const b = q.querySelectorAll("button")[i % 4]; if (b) b.click(); }); }); await sleep(200); }
   };
   while (steps++ < 140) {
     const id = await cur(); seen.push(id);
+    if (process.env.DEBUG) log("step", id);
+    // SHOTS=1: screenshots of the child's screen and the portal at a few moments
+    if (process.env.SHOTS && portal && /^(font_0|framing2|calibrate|gaze_read|dis_X2)$/.test(id) && !seen.slice(0, -1).includes(id)) {
+      if (id === "calibrate") { await clickText("Automatic: record each dot by itself"); await sleep(4200); }
+      else await sleep(1500);
+      await page.screenshot({ path: process.env.OUT + "/shot_" + id + "_laptop.png" });
+      await portal.screenshot({ path: process.env.OUT + "/shot_" + id + "_portal.png" });
+    }
     if (id === "done") break;
     if (scenario === "withdraw" && id === "dis_" + "X1" ) {}
     if (scenario === "withdraw" && seen.filter(x => /^dis_/.test(x)).length === 1 && /^dis_/.test(id) && !page.__sent) {
@@ -134,19 +189,39 @@ async function main() {
       continue;
     }
     if (/^dis_/.test(id)) { await clickText("Fine"); await clickText("Kept reading the words"); }
-    else if (/^recall_/.test(id)) { await page.evaluate(() => document.querySelectorAll("#panel .q").forEach(q => { const b = q.querySelector(".scale button"); if (b) b.click(); })); await sleep(150); }
-    else if (/^drift_/.test(id)) { await clickText("They are looking at the dot"); await sleep(1400); }
+    else if (/^recall_/.test(id)) { await pev(() => document.querySelectorAll("#panel .q").forEach(q => { const b = q.querySelector(".scale button"); if (b) b.click(); })); await sleep(150); }
+    else if (/^drift_/.test(id)) { await clickText("They are looking at the dot"); await sleep(1900); }
     else if (/^(font|size|colour|lead|track)_\d+$/.test(id)) { await key(Math.random() < 0.15 ? "3" : (Math.random() < 0.5 ? "1" : "2")); }
     else if (H[id]) await H[id]();
+    if (process.env.STOP_AT === id) {
+      await sleep(3000);
+      log("DUMP", JSON.stringify(await page.evaluate(() => ({ answers, valid: visible()[idx].valid(), frame: S._frame && S._frame.pass, phys: S.physical,
+        acts: STREAMS.rows("events").filter(e => e.type === "educator_portal_action").slice(-8).map(e => e.detail) }))));
+      log("PORTAL", await drv.evaluate(() => document.querySelector("#panel").innerHTML.slice(0, 3000)));
+      break;
+    }
     if (!(await waitValid(id === "cam_setup" || id === "gaze_check" ? 25000 : 4000))) {
       const sk = await clickText("Skip this question");
       log("no handler made it valid, skipped:", id, sk);
-      if (!sk) { log("STUCK at", id); break; }
+      if (!sk) {
+        log("STUCK at", id, JSON.stringify(await page.evaluate(() => ({ next_disabled: document.querySelector("#next").disabled, valid: !!(visible()[idx].valid ? visible()[idx].valid() : true),
+          cam: S._camSetup || null, remote: (() => { try { return REMOTE.summary(); } catch (e) { return String(e); } })() }))),
+          drv !== page ? JSON.stringify(await drv.evaluate(() => ({ next_disabled: document.querySelector("#next").disabled, conn: document.querySelector("#conn").textContent, h1: (document.querySelector("#panel h1") || {}).textContent }))) : "");
+        break; }
       continue;
     }
     await next();
   }
   log("screens:", seen.join(" > "));
+  if (portal) {
+    await portal.evaluate(() => document.querySelector("#pvseg button[data-m=on]").click()); await sleep(1500);
+    remoteChecks.preview_mode_on = await page.evaluate(() => PREVIEW.mode() === "on");
+    remoteChecks.video_track = await portal.evaluate(() => { const v = document.querySelector("#rv"); return !!(v.srcObject && v.srcObject.getVideoTracks().length) && v.videoWidth; });
+    remoteChecks.portal_actions = await page.evaluate(() => STREAMS.rows("events").filter(e => e.type === "educator_portal_action").length);
+    remoteChecks.laptop_child_view_at_end = await page.evaluate(() => document.body.classList.contains("remote"));
+    await portal.screenshot({ path: process.env.OUT + "/remote_portal.png", fullPage: false });
+    log("portal checks", JSON.stringify(remoteChecks));
+  }
   // finishing: wait for uploads
   const t0 = Date.now(); let st;
   while (Date.now() - t0 < 90000) {
@@ -165,7 +240,7 @@ async function main() {
   log("summary", JSON.stringify(summary, null, 1));
   await page.screenshot({ path: process.env.OUT + "/" + scenario + "_done.png" });
   log("errors", errors.length ? errors.slice(0, 15).join("\n") : "none");
-  fs.writeFileSync(process.env.OUT + "/" + scenario + "_result.json", JSON.stringify({ sess, summary, errors, seen }, null, 1));
+  fs.writeFileSync(process.env.OUT + "/" + scenario + "_result.json", JSON.stringify({ sess, summary, errors, seen, remoteChecks }, null, 1));
   await browser.close();
 }
 main().catch(e => { console.error(e); process.exit(1); });

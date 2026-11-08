@@ -208,6 +208,30 @@ body.child .infobtn{width:32px;height:32px;font-size:17px}
 .big-code{font-family:var(--mono);font-size:34px;letter-spacing:.25em;text-transform:uppercase}
 input.codein{font-family:var(--mono);font-size:26px;letter-spacing:.3em;text-transform:uppercase;text-align:center}
 
+/* ---------------- v5.1: educator portal, focus mode, camera preview ---------------- */
+/* With the educator portal connected the laptop is the child's screen only:
+   no questions, no buttons, no status bar. */
+body.remote #right,body.focus #right{display:none}
+body.remote #left,body.focus #left{flex:1 1 100%;border-right:none}
+body.remote #bar,body.focus #bar{display:none}
+body.focus #stage,body.remote #stage{padding:14px}
+.dothost{position:relative;width:100%;flex:1;min-height:420px}
+#rbanner{position:fixed;left:50%;top:6px;transform:translateX(-50%);z-index:91;background:#5C6670;color:#fff;font-family:var(--mono);
+  font-size:11px;padding:4px 10px;border-radius:10px;display:none}
+#rbanner.on{display:block}
+/* Local mode, dots full screen: a quiet line for the educator at the very bottom. */
+#focushint{position:fixed;left:50%;bottom:8px;transform:translateX(-50%);z-index:60;display:none;gap:10px;align-items:center;
+  font-family:var(--mono);font-size:11px;color:#8A949E}
+body.focus:not(.remote) #focushint{display:flex}
+#focushint button{border:1px solid #CFD6DC;background:transparent;color:#5C6670;font-family:var(--mono);font-size:11px;padding:3px 9px}
+/* Camera preview on the child's screen (PREVIEW): small, bottom left, mirrored. */
+#pip{position:fixed;left:12px;bottom:12px;width:min(22vw,240px);aspect-ratio:4/3;z-index:80;background:#000;border:3px solid #fff;
+  box-shadow:0 2px 10px rgba(0,0,0,.35);display:none;overflow:hidden;border-radius:6px}
+#pip.on{display:block}
+#pip video,#pip canvas{position:absolute;inset:0;width:100%;height:100%}
+#pip video{object-fit:cover;transform:scaleX(-1)}
+#pvbtn{font-size:12px;padding:7px 10px}
+
 /* screen-reader-only live region */
 .sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 </style>
@@ -217,6 +241,8 @@ input.codein{font-family:var(--mono);font-size:26px;letter-spacing:.3em;text-tra
 <div class="sr" id="live" aria-live="polite"></div>
 <div id="recind" role="status" aria-live="polite"><i></i><span>Recording video</span></div>
 <div id="syncflash" aria-hidden="true"></div>
+<div id="rbanner" role="status" aria-live="polite"></div>
+<div id="focushint"><span>Educator: press SPACE when the child is looking at the dot · Esc shows the controls</span><button type="button" onclick="KEYS.press(' ')">Looking now</button></div>
 <video id="camview" muted playsinline autoplay aria-hidden="true"></video>
 <div id="app">
   <section id="left" aria-label="What the child sees">
@@ -228,6 +254,7 @@ input.codein{font-family:var(--mono);font-size:26px;letter-spacing:.3em;text-tra
     <div id="foot">
       <button class="btn ghost" id="back">Back</button>
       <div class="prog"><span id="ptxt"></span><div class="bar"><div id="pbar" style="width:0%"></div></div></div>
+      <button class="btn ghost hide" id="pvbtn" title="Show the camera picture on this screen: auto = only when the face leaves the frame">Camera preview: auto</button>
       <button class="btn" id="next">Next</button>
       <button class="btn stop hide" id="stop">Stop now</button>
     </div>
@@ -238,10 +265,10 @@ input.codein{font-family:var(--mono);font-size:26px;letter-spacing:.3em;text-tra
 /* ===========================================================================
    GLIDE, preference-elicitation instrument for students aged 12 and above
    Two paired sessions: CHILD (perceptual choices) + EDUCATOR (everything else)
-   Instrument glide-p1-child-v5.0.0 · Schema 4.0.0
+   Instrument glide-p1-child-v5.1.0 · Schema 4.1.0
    ========================================================================= */
-const INSTRUMENT_VERSION = "glide-p1-child-v5.0.0";
-const SCHEMA_VERSION = "4.0.0";
+const INSTRUMENT_VERSION = "glide-p1-child-v5.1.0";
+const SCHEMA_VERSION = "4.1.0";
 
 /* =========================================================================
    WEBGAZER  -  READ THIS BEFORE DEPLOYING
@@ -275,6 +302,97 @@ const SCHEMA_VERSION = "4.0.0";
    unusable, the gaze screens skip themselves, the reason is recorded, and the
    study runs on preference data alone.
    ========================================================================= */
+/* =========================================================================
+   SHARED · FACE OVERLAY
+   -------------------------------------------------------------------------
+   Built into BOTH the participant laptop (its optional camera preview) and
+   the educator portal (the live video). One drawing, so the educator and the
+   laptop always show the same oval and the same judgement.
+
+   Input is a face-quality row as FACEQ produces it (box and eye centres in
+   the pixel frame WebGazer analysed, img_w x img_h) plus the six framing
+   checks. The video is shown mirrored, like a mirror, with object-fit:cover,
+   so the box is mapped through the same crop and flip.
+   ========================================================================= */
+const FACE_OVAL = { cx: 0.5, cy: 0.48, rx: 0.17, ry: 0.31 };   // same oval as the framing screen (34% x 62% of the frame)
+
+function faceMapper(f, bw, bh) {
+  const iw = (f && f.img_w) || 640, ih = (f && f.img_h) || 480;
+  const s = Math.max(bw / iw, bh / ih), ox = (bw - iw * s) / 2, oy = (bh - ih * s) / 2;
+  return (x, y) => [bw - (x * s + ox), y * s + oy];
+}
+
+/* What the educator should do, in words, from the checks. Child's own
+   left/right: the picture is mirrored, so "move left" is the child's left. */
+function faceAdvice(f, checks) {
+  if (!f) return "Waiting for the camera";
+  if (!f.face_detected) return "No face in view: bring the child back in front of the screen";
+  const out = [];
+  const iw = f.img_w || 640, ih = f.img_h || 480;
+  const cx = (f.box_x + f.box_w / 2) / iw, cy = (f.box_y + f.box_h / 2) / ih;
+  if (cx < 0.38) out.push("move to their left");
+  else if (cx > 0.62) out.push("move to their right");
+  if (cy < 0.32) out.push("sit lower or tilt the screen up");
+  else if (cy > 0.66) out.push("sit up or tilt the screen down");
+  if (checks && checks.distance && checks.distance.g !== "g" && checks.distance.why) out.push(checks.distance.why === "too far back" ? "come a little closer" : checks.distance.why === "too close" ? "sit a little further back" : "");
+  if (checks && checks.eyes && checks.eyes.g === "r") out.push("face the screen");
+  if (checks && checks.lighting && checks.lighting.g === "r") out.push(checks.lighting.why);
+  const s = out.filter(Boolean);
+  return s.length ? s.join(" · ") : "Good";
+}
+
+function drawFaceOverlay(cv, f, o) {
+  o = o || {};
+  const W = cv.clientWidth || cv.width, H = cv.clientHeight || cv.height, dpr = window.devicePixelRatio || 1;
+  if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+  const c = cv.getContext("2d");
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  c.clearRect(0, 0, W, H);
+  const fresh = f && (o.age_ms === undefined || o.age_ms < 1500);
+  const face = fresh && f.face_detected && f.box_w;
+  const good = !!o.pass, col = good ? "#3FB37F" : face ? "#E0A526" : "#E0533D";
+  // the oval the face should sit in
+  c.lineWidth = Math.max(2, W / 160);
+  c.setLineDash(good ? [] : [W / 40, W / 60]);
+  c.strokeStyle = good ? col : "rgba(255,255,255,.92)";
+  c.beginPath(); c.ellipse(W * FACE_OVAL.cx, H * FACE_OVAL.cy, W * FACE_OVAL.rx, H * FACE_OVAL.ry, 0, 0, Math.PI * 2); c.stroke();
+  c.setLineDash([]);
+  if (face) {
+    const m = faceMapper(f, W, H);
+    const a = m(f.box_x, f.box_y), b = m(f.box_x + f.box_w, f.box_y + f.box_h);
+    const x0 = Math.min(a[0], b[0]), y0 = Math.min(a[1], b[1]), x1 = Math.max(a[0], b[0]), y1 = Math.max(a[1], b[1]);
+    c.strokeStyle = col; c.lineWidth = Math.max(2, W / 200);
+    c.strokeRect(x0, y0, x1 - x0, y1 - y0);
+    // eye centres: green open, amber closed or hidden
+    const eyesOpen = f.ear_left !== null && Math.min(f.ear_left, f.ear_right) > 0.15;
+    (o.pts ? [o.pts.le, o.pts.re] : []).forEach(p => {
+      if (!p) return; const q = m(p[0], p[1]);
+      c.fillStyle = eyesOpen ? "#3FB37F" : "#E0A526";
+      c.beginPath(); c.arc(q[0], q[1], Math.max(3, W / 90), 0, Math.PI * 2); c.fill();
+      c.strokeStyle = "#fff"; c.lineWidth = 1.5; c.stroke();
+    });
+    // arrow from the face centre to the oval centre when it is well off
+    const fx = (x0 + x1) / 2, fy = (y0 + y1) / 2, tx = W * FACE_OVAL.cx, ty = H * FACE_OVAL.cy;
+    const d = Math.hypot(tx - fx, ty - fy);
+    if (!good && d > W * 0.09) {
+      const ux = (tx - fx) / d, uy = (ty - fy) / d, L = Math.min(d * 0.7, W * 0.22);
+      const ex = fx + ux * L, ey = fy + uy * L, hs = Math.max(8, W / 28);
+      c.strokeStyle = "#fff"; c.fillStyle = "#fff"; c.lineWidth = Math.max(3, W / 110);
+      c.beginPath(); c.moveTo(fx, fy); c.lineTo(ex, ey); c.stroke();
+      c.beginPath(); c.moveTo(ex, ey);
+      c.lineTo(ex - ux * hs - uy * hs * 0.6, ey - uy * hs + ux * hs * 0.6);
+      c.lineTo(ex - ux * hs + uy * hs * 0.6, ey - uy * hs - ux * hs * 0.6); c.closePath(); c.fill();
+    }
+  }
+  if (o.label !== false) {
+    const txt = !fresh ? "camera starting" : !f.face_detected ? "no face" : good ? "in frame" : "adjust";
+    const fs = Math.max(11, W / 22);
+    c.font = "600 " + fs + "px -apple-system,Segoe UI,Roboto,Arial,sans-serif";
+    const tw = c.measureText(txt).width + fs;
+    c.fillStyle = col; c.fillRect(6, 6, tw, fs * 1.6);
+    c.fillStyle = "#fff"; c.textBaseline = "middle"; c.fillText(txt, 6 + fs / 2, 6 + fs * 0.8);
+  }
+}
 /* ===== BEGIN WEBGAZER BUNDLE (webgazer 3.5.3, dist/webgazer.js, verbatim) ===== */
 /*!
  * 
@@ -15214,6 +15332,12 @@ const SYNC = {
     if (!this.enabled) { EV.log("sync_flash_skipped", { label }); return Promise.resolve(); }
     const n = document.getElementById("syncflash");
     return new Promise(res => {
+      /* v5.1: animation frames do not run while the tab is hidden, and a
+         flash that never resolves would hang whatever awaits it (camera
+         setup). Give up after 2 s and say so. */
+      let done = false;
+      const fin = () => { if (!done) { done = true; res(); } };
+      setTimeout(() => { if (!done) { n.classList.remove("on"); EV.log("sync_flash_timeout", { label, hidden: document.hidden }); fin(); } }, 2000);
       requestAnimationFrame(t0 => {
         n.classList.add("on");
         requestAnimationFrame(t1 => {
@@ -15221,7 +15345,7 @@ const SYNC = {
           setTimeout(() => requestAnimationFrame(t2 => {
             n.classList.remove("on");
             EV.log("sync_flash_off", { label, frame_index: FRAMES.current() }, CLOCK.fromPerf(t2));
-            res();
+            fin();
           }), 250);
         });
       });
@@ -15237,12 +15361,12 @@ const SYNC = {
    Head pose from landmark depth is approximate (degrees, +-5 or so); it is
    for flagging unusable stretches, not for analysis of head movement. */
 const FACEQ = (function () {
-  let hooked = false, last = 0, n = 0, baseIOD = null, baseDistCm = null, latest = null;
+  let hooked = false, last = 0, n = 0, baseIOD = null, baseDistCm = null, latest = null, pts = null;
   const tiny = document.createElement("canvas"); tiny.width = 64; tiny.height = 36;
   const L = { lOut:33, lIn:133, lTop:159, lBot:145, rIn:362, rOut:263, rTop:386, rBot:374,
               nose:1, cheekL:234, cheekR:454, chin:152, brow:10 };
   const deg = r => +(r * 180 / Math.PI).toFixed(1);
-  function measure(ok, pts, canvas) {
+  function measure(ok, lm, canvas) {
     const t = CLOCK.t();
     const row = { t_perf:t, frame_index:FRAMES.current(), face_detected:!!ok,
       box_x:null, box_y:null, box_w:null, box_h:null,
@@ -15250,14 +15374,17 @@ const FACEQ = (function () {
       landmark_confidence:null, yaw_deg:null, pitch_deg:null, roll_deg:null,
       ear_left:null, ear_right:null, eyes_closed:null, interocular_px:null, distance_ratio:null,
       face_brightness:null, bg_brightness:null, screen_id: CUR_SCREEN.id };
-    if (ok && pts && pts.length >= 455) {
+    if (!ok) pts = null;
+    if (ok && lm && lm.length >= 455) {
       let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
-      for (const p of pts) { if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0]; if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1]; }
+      for (const p of lm) { if (p[0] < x0) x0 = p[0]; if (p[0] > x1) x1 = p[0]; if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1]; }
       row.box_x = Math.round(x0); row.box_y = Math.round(y0); row.box_w = Math.round(x1 - x0); row.box_h = Math.round(y1 - y0);
-      const P = i => pts[i], d = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+      const P = i => lm[i], d = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
       const lc = [(P(L.lOut)[0] + P(L.lIn)[0]) / 2, (P(L.lOut)[1] + P(L.lIn)[1]) / 2];
       const rc = [(P(L.rOut)[0] + P(L.rIn)[0]) / 2, (P(L.rOut)[1] + P(L.rIn)[1]) / 2];
       row.interocular_px = +d(lc, rc).toFixed(1);
+      // v5.1: eye centres for the live overlay (portal and laptop preview). Not exported.
+      pts = { le: [Math.round(lc[0]), Math.round(lc[1])], re: [Math.round(rc[0]), Math.round(rc[1])] };
       row.roll_deg  = deg(Math.atan2(P(L.rOut)[1] - P(L.lOut)[1], P(L.rOut)[0] - P(L.lOut)[0]));
       row.yaw_deg   = deg(Math.atan2((P(L.cheekR)[2] || 0) - (P(L.cheekL)[2] || 0), P(L.cheekR)[0] - P(L.cheekL)[0]));
       row.pitch_deg = deg(Math.atan2((P(L.chin)[2] || 0) - (P(L.brow)[2] || 0), P(L.chin)[1] - P(L.brow)[1]));
@@ -15307,6 +15434,21 @@ const FACEQ = (function () {
       } catch (e) { return false; }
     },
     latest() { return latest; },
+    points() { return pts; },
+    /* Is this moment usable for teaching the gaze model? A training sample
+       taken mid-blink, with the head turned, or with no face at all teaches
+       the regression the wrong mapping, and one bad sample in 45 measurably
+       worsens accuracy. Unknown (face model not hooked) is allowed, and the
+       caller records that it was ungated. */
+    usableNow(maxAgeMs) {
+      if (!hooked || !latest) return { ok: true, gated: false, why: "face_model_not_hooked" };
+      const age = CLOCK.t() - latest.t_perf;
+      if (age > (maxAgeMs || 500)) return { ok: false, gated: true, why: "no_recent_frame" };
+      if (!latest.face_detected) return { ok: false, gated: true, why: "no_face" };
+      if (latest.eyes_closed || Math.min(latest.ear_left, latest.ear_right) < PROTOCOL.ear_closed) return { ok: false, gated: true, why: "eyes_closed" };
+      if (Math.abs(latest.yaw_deg) > PROTOCOL.usable_pose_max_yaw_deg || Math.abs(latest.pitch_deg) > PROTOCOL.usable_pose_max_pitch_deg) return { ok: false, gated: true, why: "head_turned" };
+      return { ok: true, gated: true, why: "ok" };
+    },
     setBaseline(distCm) { if (latest && latest.interocular_px) { baseIOD = latest.interocular_px; baseDistCm = distCm || null;
       EV.log("interocular_baseline", { interocular_px: baseIOD, distance_cm: baseDistCm }); } return baseIOD; },
     baseline() { return { interocular_px: baseIOD, distance_cm: baseDistCm }; },
@@ -15780,7 +15922,17 @@ const GAZE = (function () {
         if (orig) md.getUserMedia = share;
         const restore = () => { if (orig) md.getUserMedia = orig; };
         initPromise = Promise.resolve(wg.begin())
-          .then(r => { restore(); FACEQ.hook(); return r; }, e => { restore(); throw e; })
+          .then(r => {
+            restore(); FACEQ.hook();
+            /* v5.1: WebGazer's begin() trains the model on EVERY click and
+               mouse movement on the page by default. On this instrument the
+               clicks are the educator's (the "they are looking" button, the
+               answers), so each one taught the model that the child was
+               looking at the button. That alone ruins a calibration. Only the
+               explicit calibration samples below may train it. */
+            try { if (wg.removeMouseEventListeners) wg.removeMouseEventListeners(); EV.log("webgazer_mouse_training_off", {}); } catch (e) {}
+            return r;
+          }, e => { restore(); throw e; })
           .then(() => this.probe())
           .catch(e => { restore(); health = "dead"; this.healthReason = "begin_failed:" + (e && e.message ? e.message : e); return false; });
         return initPromise;
@@ -15831,7 +15983,7 @@ const GAZE = (function () {
     start(phase) {
       wg = lib(); if (!wg || health !== "live") return;
       buf = []; started = performance.now(); active = true; this.phase = phase || CUR_SCREEN.id;
-      this.lost = 0;
+      this.lost = 0; this.lostT = [];
       const self = this;
       EV.log("gaze_sampling_start", { phase: this.phase });
       try {
@@ -15840,21 +15992,23 @@ const GAZE = (function () {
           if (!active) return;
           const t = CLOCK.t();
           if (!d || !isFinite(d.x) || !isFinite(d.y)) {
-            self.lost++;
+            self.lost++; self.lostT.push(t);
             STREAMS.push("gaze", { t_perf:t, x:null, y:null, valid:false, screen_id:CUR_SCREEN.id, phase:self.phase });
             return;
           }
           const x = Math.round(d.x), y = Math.round(d.y);
+          self.last = { x, y, t_perf: t };
           buf.push({ x, y, t: Math.round(performance.now() - started), t_perf: t });
           STREAMS.push("gaze", { t_perf:t, x, y, valid:true, screen_id:CUR_SCREEN.id, phase:self.phase });
         });
       } catch (e) {}
     },
     sampling() { return active; },
+    lastPred() { return active ? this.last || null : null; },
 
     // Collect raw samples without zone analysis (used by validation).
     peek() { return buf.slice(); },
-    lostCount() { return this.lost || 0; },
+    lostCount(since) { return since === undefined ? (this.lost || 0) : (this.lostT || []).filter(t => t >= since).length; },
     /* Calibration training samples. WebGazer learns from each call. */
     train(x, y) {
       wg = lib(); if (!wg) return;
@@ -16749,6 +16903,7 @@ const INFO = {
 function showInfo(key) {
   const d = INFO[key]; if (!d) return;
   const b = $("#imodal-body"); b.innerHTML = "";
+  const onPortal = () => { try { return REMOTE.modal(b.innerHTML); } catch (e) { return false; } };
   b.appendChild(el("h3", { text: d.title }));
   b.appendChild(el("div", { class:"sub", text:"Why we ask this, and why we do not assume the answer" }));
   b.appendChild(el("h4", { text:"Why we ask" }));
@@ -16757,6 +16912,7 @@ function showInfo(key) {
   b.appendChild(el("p", { text:d.assume }));
   b.appendChild(el("h4", { text:"Evidence base" }));
   b.appendChild(el("p", { class:"cite", text:d.cite }));
+  if (onPortal()) return;   // v5.1: never on the child's screen while the portal has the controls
   b.appendChild(el("button", { class:"close", text:"Close", onclick:() => $("#imodal").classList.remove("on") }));
   $("#imodal").classList.add("on");
 }
@@ -16794,6 +16950,7 @@ function applyJoined(cfg) {
   S.consent.retention_until = cfg.retention_until || null;
   if (cfg.sync_flash === false) SYNC.enabled = false;
   EV.log("joined_admin_session", { join_code: cfg.join_code, session_id: cfg.session_id });
+  try { REMOTE.start(); } catch (e) {}   // v5.1: wait for the educator portal
 }
 add({ id:"connect", block:"admin", bar:"off",
   enter: () => { if (LINK.configured() && LINK.online() === null) LINK.ping().then(() => paint(), () => paint()); OUTBOX.refresh().then(() => paint()); },
@@ -16813,6 +16970,10 @@ add({ id:"connect", block:"admin", bar:"off",
     if (S.link.joined) {
       const c = S.link.admin_session;
       w.appendChild(el("div", { class:"notice ok", html:"<strong>Joined.</strong> " + c.mode + " session for child <strong>" + (c.child_id || "-") + "</strong>, educator " + (c.educator_id || "-") + ". Press Next." }));
+      let portal = false; try { portal = REMOTE.isOpen(); } catch (e) {}
+      w.appendChild(el("div", { class: "notice" + (portal ? " ok" : ""), html: portal
+        ? "<strong>Educator portal connected.</strong> From now on this laptop shows only what the child sees; the questions and buttons are on the portal."
+        : "<strong>Educator portal (optional):</strong> open the portal link from the admin console on the educator's phone, tablet or laptop and enter join code <strong>" + c.join_code + "</strong>. It connects by itself. Without it, the controls stay on this laptop." }));
       return w;
     }
     if (!LINK.configured()) {
@@ -17943,21 +18104,60 @@ function bsMedian() {
    re-calibrated offline with a better gaze model later: it is the single most
    valuable thing v5 adds. */
 const CAL_PTS = [[12,12],[50,12],[88,12],[12,50],[50,50],[88,50],[12,88],[50,88],[88,88]];
-const CAL_TRAIN_N = 5, CAL_TRAIN_GAP_MS = 120;
-function calNew() {
+/* v5.1: each dot is taught with up to 8 samples over at most 3 s, and a
+   sample is only taken when the face model sees the face, both eyes open and
+   the head roughly straight (FACEQ.usableNow). A dot with fewer than 4 clean
+   samples is not counted: the child is asked to look again. At least 7 of the
+   9 dots must be taught; the educator may skip a dot that will not work. */
+const CAL_TRAIN_N = 8, CAL_TRAIN_GAP_MS = 90, CAL_MAX_MS = 3000, CAL_MIN_GOOD = 4, CAL_MIN_POINTS = 7, CAL_AUTO_DWELL_MS = 1200;
+function calNew(keepModel) {
   S.calibration_attempts++;
-  S._calib = { attempt: S.calibration_attempts, order: shuffle(CAL_PTS.map((_, i) => i)), i: 0, done: 0, hit: {}, clicks: 0, busy: false, onsetFor: -1 };
-  EV.log("calibration_attempt_start", { attempt: S.calibration_attempts, order: S._calib.order });
+  S._calib = { attempt: S.calibration_attempts, order: shuffle(CAL_PTS.map((_, i) => i)), i: 0, done: 0, hit: {}, clicks: 0, busy: false, onsetFor: -1,
+    retries: {}, skipped: [], keep_model: !!keepModel, msg: null };
+  EV.log("calibration_attempt_start", { attempt: S.calibration_attempts, order: S._calib.order, keep_model: !!keepModel });
+}
+const calComplete = c => !!(c && c.i >= CAL_PTS.length && c.done >= CAL_MIN_POINTS);
+/* Automatic mode: the dot records itself once the child has looked at it for
+   CAL_AUTO_DWELL_MS and the face is usable. The educator still watches (on
+   the portal's video, or beside the child) and can press the button sooner. */
+let CAL_AUTO_T = null;
+function autoArm(fn, key) {
+  clearTimeout(CAL_AUTO_T);
+  if (!S._calAuto) return;
+  const t0 = performance.now();
+  const tryIt = () => {
+    if (!S._calAuto || CUR_SCREEN.id !== key.screen || key.still() === false) return;
+    if (FACEQ.usableNow().ok) { fn("auto"); return; }
+    if (performance.now() - t0 < 8000) CAL_AUTO_T = setTimeout(tryIt, 250);
+  };
+  CAL_AUTO_T = setTimeout(tryIt, CAL_AUTO_DWELL_MS);
+}
+const GATE_WORDS = { no_face: "no face in view", eyes_closed: "eyes closed or blinking", head_turned: "head turned away", no_recent_frame: "camera not updating" };
+/* A small live line on the educator panel: can the camera see the eyes right now? */
+function liveFaceLine() {
+  const n = el("div", { class: "notice", "data-livefa": "1", text: "Checking the face…" });
+  return n;
+}
+setInterval(() => {
+  const n = document.querySelector("#panel [data-livefa]"); if (!n) return;
+  const u = FACEQ.usableNow();
+  const t = !u.gated ? "Face check not available on this laptop; samples are not filtered." : u.ok ? "Camera sees the face and both eyes. Good." : "Not usable right now: " + (GATE_WORDS[u.why] || u.why) + ".";
+  if (n.textContent !== t) { n.textContent = t; n.className = "notice " + (u.ok ? "ok" : "bad"); }
+}, 300);
+function autoToggle() {
+  return el("button", { class: "opt" + (S._calAuto ? " on" : ""), onclick: () => { S._calAuto = !S._calAuto; log("gaze", "calibration_auto_mode", S._calAuto); paint(); } },
+    [el("span", { text: "Automatic: record each dot by itself" }), el("span", { class: "sub", text: "After the child has looked at it for about a second and the camera sees both eyes. You still watch, and can press the button sooner." })]);
 }
 add({ id:"calibrate", block:"gaze", bar:"off", skipIf: () => !gazeOn(),
-  enter: () => { if (!S._calib || S._calib.attempt === undefined) calNew(); say("Look at each dot when it appears, and keep looking until it goes away."); },
+  focus: () => !!(S._calib && S._calib.i < CAL_PTS.length),
+  enter: () => { if (!S._calib || S._calib.attempt === undefined) { calNew(S._calKeep); S._calKeep = false; } say("Look at each dot when it appears, and keep looking until it goes away."); },
   stageFn: () => {
-    const host = el("div", { style:"position:relative;width:100%;height:100%;min-height:420px" });
+    const host = el("div", { class: "dothost" });
     const c = S._calib;
     if (c && c.i < CAL_PTS.length) {
       const pi = c.order[c.i], p = CAL_PTS[pi];
       const dot = el("button", { class:"ctarget", style:`left:${p[0]}%;top:${p[1]}%`, "aria-label":"Calibration point " + (c.i + 1) + " of 9",
-        onclick:() => calRecord() });
+        onclick:() => calRecord("dot_click") });
       host.appendChild(dot);
       if (c.onsetFor !== c.i) {
         c.onsetFor = c.i;
@@ -17965,25 +18165,46 @@ add({ id:"calibrate", block:"gaze", bar:"off", skipIf: () => !gazeOn(),
           c.onset_t_perf = CLOCK.fromPerf(rt);
           const r = dot.getBoundingClientRect();
           c.target = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-          EV.log("calibration_target_onset", { attempt:c.attempt, point:pi, order:c.i, x:Math.round(c.target.x), y:Math.round(c.target.y) }, c.onset_t_perf);
+          EV.log("calibration_target_onset", { attempt:c.attempt, point:pi, order:c.i, x:Math.round(c.target.x), y:Math.round(c.target.y), retry: c.retries[pi] || 0 }, c.onset_t_perf);
+          if (GAZE.sampling()) GAZE.stop();
           GAZE.start("calibration");
           requestAnimationFrame(() => dot.classList.add("shrunk"));
+          const order = c.i;
+          c.armedFor = S._calAuto ? order : null;
+          autoArm(calRecord, { screen: "calibrate", still: () => S._calib === c && c.i === order && !c.busy });
         });
-      } else dot.classList.add("shrunk");
+      } else {
+        dot.classList.add("shrunk");
+        // automatic mode switched on while this dot was already showing
+        if (S._calAuto && c.armedFor !== c.i && !c.busy) { const order = c.i; c.armedFor = order;
+          autoArm(calRecord, { screen: "calibrate", still: () => S._calib === c && c.i === order && !c.busy }); }
+      }
     }
     stage(host, "Calibration, the child looks at each dot as it appears");
   },
   panel: () => {
     const w = el("div", { class:"wrap" });
-    const c = S._calib || { i:0, attempt:1 };
-    w.appendChild(el("div", { class:"eyebrow", text:"Calibration · attempt " + c.attempt + " of " + (1 + PROTOCOL.max_recalibrations) }));
+    const c = S._calib || { i:0, attempt:1, done:0, retries:{}, skipped:[] };
+    w.appendChild(el("div", { class:"eyebrow", text:"Calibration · attempt " + c.attempt + " of " + (1 + PROTOCOL.max_recalibrations) + (c.keep_model ? " · adding to the earlier one" : "") }));
     w.appendChild(el("h1", { text:"Teach the camera" }));
-    w.appendChild(el("p", { class:"lede", text:"One dot appears at a time. When the child is looking straight at it, press the button below (or click the dot, or press the space bar). It moves on by itself." }));
+    w.appendChild(el("p", { class:"lede", text:"One dot at a time. When the child is looking straight at it, press the button (or the space bar). Ask them to keep looking until it moves: it takes about a second." }));
     if (c.i < CAL_PTS.length) {
-      w.appendChild(el("button", { class:"btn", style:"width:100%", text: c.busy ? "Recording…" : "They are looking at the dot", onclick:() => calRecord() }));
-      KEYS.set({ " ": () => calRecord() });
+      w.appendChild(el("button", { class:"btn", style:"width:100%", text: c.busy ? "Recording… keep looking" : "They are looking at the dot", onclick:() => calRecord("educator") }));
+      KEYS.set({ " ": () => calRecord("educator") });
+      w.appendChild(liveFaceLine());
+      if (c.msg) {
+        w.appendChild(el("div", { class:"notice bad", text:c.msg }));
+        w.appendChild(el("button", { class:"speak", text:"Skip this dot", onclick:() => calSkipPoint() }));
+      }
     }
-    w.appendChild(el("div", { class:"notice", text: Math.min(c.i, 9) + " of 9 done. If the child will not look, or seems uncomfortable, press Skip eye tracking below; the rest of the study (and the video) is unaffected." }));
+    const retried = Object.values(c.retries || {}).reduce((a, b) => a + b, 0);
+    w.appendChild(el("div", { class:"notice", text: c.done + " of 9 taught" + (retried ? " · " + retried + " looked at again" : "") + ((c.skipped || []).length ? " · " + c.skipped.length + " skipped" : "") +
+      ". At least " + CAL_MIN_POINTS + " are needed. If the child will not look, or seems uncomfortable, press Skip eye tracking below; the rest of the study (and the video) is unaffected." }));
+    if (c.i >= CAL_PTS.length && c.done < CAL_MIN_POINTS) {
+      w.appendChild(el("div", { class:"notice bad", text:"Too few dots were taught for a usable model." }));
+      if (attemptsLeft() > 0) w.appendChild(el("button", { class:"btn", style:"width:100%", text:"Start the dots again", onclick:() => { GAZE.resetModel(); calNew(false); paint(); } }));
+    }
+    w.appendChild(autoToggle());
     w.appendChild(el("button", { class:"speak", text:"Skip eye tracking", onclick:() => {
       GAZE.consent = "declined"; S.gaze_off = true; log("gaze","calibration","skipped", { attempt: c.attempt });
       try { GAZE.stop(); } catch (e) {}
@@ -17992,41 +18213,76 @@ add({ id:"calibrate", block:"gaze", bar:"off", skipIf: () => !gazeOn(),
     return w;
   },
   info: "calibrate",
-  onLeave: () => { GAZE.calibrated = !!(S._calib && S._calib.done >= 9);
+  onLeave: () => { clearTimeout(CAL_AUTO_T); GAZE.calibrated = calComplete(S._calib);
     if (GAZE.sampling()) GAZE.stop();
     if (GAZE.calibrated) FACEQ.setBaseline(viewingDistanceCm().cm);
     log("gaze","calibration", GAZE.calibrated ? "complete" : "partial",
       { attempt: S._calib ? S._calib.attempt : null, points_done: S._calib ? S._calib.done : 0, points_total: 9,
-        order: S._calib ? S._calib.order : null, health: GAZE.health(), interocular_baseline: FACEQ.baseline() }); },
-  valid: () => !!(S._calib && S._calib.done >= 9)
+        points_skipped: S._calib ? S._calib.skipped : null, retries: S._calib ? S._calib.retries : null, keep_model: S._calib ? S._calib.keep_model : null,
+        auto_mode: !!S._calAuto, order: S._calib ? S._calib.order : null, health: GAZE.health(), interocular_baseline: FACEQ.baseline() }); },
+  valid: () => calComplete(S._calib)
 });
-function calRecord() {
+function calSkipPoint() {
+  const c = S._calib; if (!c || c.busy || c.i >= CAL_PTS.length) return;
+  const pi = c.order[c.i];
+  c.skipped.push(pi); c.i++; c.msg = null; c.target = null;
+  EV.log("calibration_target_skipped", { attempt: c.attempt, point: pi });
+  if (GAZE.sampling()) GAZE.stop();
+  paint();
+}
+function calRecord(source) {
   const c = S._calib; if (!c || c.busy || c.i >= CAL_PTS.length || !c.target) return;
-  c.busy = true; paint();
-  const pi = c.order[c.i], target = c.target, click = CLOCK.t();
-  EV.log("calibration_target_click", { attempt:c.attempt, point:pi, order:c.i }, click);
-  const trainT = [];
-  let k = 0;
+  clearTimeout(CAL_AUTO_T);
+  c.busy = true; c.msg = null; paint();
+  const pi = c.order[c.i], target = c.target, click = CLOCK.t(), t0 = performance.now();
+  EV.log("calibration_target_click", { attempt:c.attempt, point:pi, order:c.i, source: source || "educator" }, click);
+  const trainT = [], rejected = {};
+  let good = 0, gated = true;
   const tick = () => {
-    GAZE.train(target.x, target.y); trainT.push(CLOCK.t());
-    if (++k < CAL_TRAIN_N) { setTimeout(tick, CAL_TRAIN_GAP_MS); return; }
+    if (S._calib !== c) return;                  // left the screen or restarted mid-dot
+    const u = FACEQ.usableNow();
+    gated = gated && u.gated;
+    if (u.ok) { GAZE.train(target.x, target.y); trainT.push(CLOCK.t()); good++; }
+    else rejected[u.why] = (rejected[u.why] || 0) + 1;
+    if (good < CAL_TRAIN_N && performance.now() - t0 < CAL_MAX_MS) { setTimeout(tick, CAL_TRAIN_GAP_MS); return; }
     const off = CLOCK.t();
     const samples = GAZE.peek();
     GAZE.stop();
     const med = a => { if (!a.length) return null; const b = a.slice().sort((x, y) => x - y); return b[Math.floor(b.length / 2)]; };
     const mx = med(samples.map(q => q.x)), my = med(samples.map(q => q.y));
-    STREAMS.push("calibration", { attempt:c.attempt, kind:"calibration", point_index:pi, order:c.i,
+    const accepted = good >= CAL_MIN_GOOD;
+    STREAMS.push("calibration", { attempt:c.attempt, kind: accepted ? "calibration" : "calibration_retry", point_index:pi, order:c.i,
       target_x:Math.round(target.x), target_y:Math.round(target.y), onset_t_perf:c.onset_t_perf, click_t_perf:click, offset_t_perf:off,
       n_samples:samples.length, median_x:mx, median_y:my,
       error_px: mx === null ? null : Math.round(Math.hypot(mx - target.x, my - target.y)), error_deg:null,
-      samples_json: JSON.stringify({ predictions: samples.map(q => [q.x, q.y, q.t_perf]), training_t_perf: trainT }) });
-    EV.log("calibration_target_offset", { attempt:c.attempt, point:pi, order:c.i, training_samples: CAL_TRAIN_N }, off);
-    c.hit[pi] = true; c.done++; c.clicks++; c.i++; c.busy = false; c.target = null;
+      samples_json: JSON.stringify({ predictions: samples.map(q => [q.x, q.y, q.t_perf]), training_t_perf: trainT, trained: good,
+        gated, rejected_ticks: rejected, source: source || "educator", keep_model: c.keep_model }) });
+    EV.log("calibration_target_offset", { attempt:c.attempt, point:pi, order:c.i, training_samples: good, accepted, rejected_ticks: rejected }, off);
+    if (accepted) { c.hit[pi] = true; c.done++; c.i++; c.target = null; }
+    else {
+      c.retries[pi] = (c.retries[pi] || 0) + 1;
+      const top = Object.keys(rejected).sort((a, b) => rejected[b] - rejected[a])[0];
+      c.msg = "That dot did not count: the camera could not see the eyes clearly enough (" + (GATE_WORDS[top] || top || "unknown") +
+        "). Ask the child to look at the dot again, eyes open, head still, and press the button again.";
+      c.onsetFor = -1;                               // the dot re-appears large, which also re-catches attention
+    }
+    c.clicks++; c.busy = false;
     paint();
   };
   tick();
 }
 
+/* The dot the child should be looking at right now, for the portal's map. */
+function currentGazeTarget() {
+  const id = CUR_SCREEN.id || "";
+  let n = null, kind = null, busy = false;
+  if (id === "calibrate" && S._calib) { n = document.querySelector("#stage .ctarget"); kind = "calibration"; busy = !!S._calib.busy; }
+  else if (id === "validate" && S._val) { n = document.querySelectorAll("#stage .valdot")[S._val.i]; kind = "validation"; busy = !!S._val.busy; }
+  else if (/^drift_/.test(id) && S._drift) { n = document.querySelector("#stage .valdot"); kind = "drift"; busy = !!S._drift.busy; }
+  if (!n) return null;
+  const r = n.getBoundingClientRect();
+  return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), kind, busy };
+}
 /* ---------------------------------------------------------- validation */
 /* Calibration says a model was fitted. Validation says how good it is, for
    this student, in this room. Five targets the model was never trained on;
@@ -18051,10 +18307,15 @@ function pxPerDegree() {
 const attemptsLeft = () => (1 + PROTOCOL.max_recalibrations) - S.calibration_attempts;
 /* Recalibration: a fresh model, a fresh validation, then back to where it was
    asked for (the validation screen itself, or a drift check later on). */
-function recalibrate(returnTo) {
+function recalibrate(returnTo, fresh) {
   if (attemptsLeft() <= 0) return;
-  log("gaze", "recalibration_requested", S.calibration_attempts, { from: CUR_SCREEN.id, return_to: returnTo || null });
-  GAZE.resetModel();
+  log("gaze", "recalibration_requested", S.calibration_attempts, { from: CUR_SCREEN.id, return_to: returnTo || null, fresh: !!fresh });
+  /* v5.1: by default the earlier clean samples are kept and nine more are
+     added (more data helps this regression; a reset throws good samples away).
+     "From scratch" is for when the setup changed: the child moved seats, the
+     screen was tilted, the lights changed. */
+  if (fresh) GAZE.resetModel(); else { GAZE.calibrated = false; GAZE.validation = null; }
+  S._calKeep = !fresh;
   S._calib = null; S._val = { i:0, pts:[] }; S._returnTo = returnTo || null;
   if (returnTo && S._drift) S._drift[returnTo] = null;
   jumpTo("calibrate");
@@ -18068,9 +18329,10 @@ function skipGaze(where) {
   jumpTo("gaze_read");
 }
 add({ id:"validate", block:"gaze", bar:"off", skipIf: () => !(gazeOn() && GAZE.calibrated),
+  focus: () => !!(S._val && S._val.i < VAL_PTS.length),
   enter: () => { if (!S._val) S._val = { i: 0, pts: [] }; say("A few more dots. Look at each one until it turns green."); },
   stageFn: () => {
-    const host = el("div", { style:"position:relative;width:100%;height:100%;min-height:420px" });
+    const host = el("div", { class:"dothost" });
     VAL_PTS.forEach((p, i) => {
       const done = i < S._val.i;
       host.appendChild(el("div", { class:"valdot" + (done ? " done" : ""),
@@ -18080,7 +18342,12 @@ add({ id:"validate", block:"gaze", bar:"off", skipIf: () => !(gazeOn() && GAZE.c
     if (S._val.i < VAL_PTS.length && S._val.onsetFor !== S._val.i) {
       S._val.onsetFor = S._val.i;
       requestAnimationFrame(rt => { S._val.onset = CLOCK.fromPerf(rt);
-        EV.log("validation_target_onset", { attempt: S.calibration_attempts, index: S._val.i }, S._val.onset); });
+        EV.log("validation_target_onset", { attempt: S.calibration_attempts, index: S._val.i }, S._val.onset);
+        const v = S._val, i = v.i; v.armedFor = S._calAuto ? i : null;
+        autoArm(measureValPoint, { screen: "validate", still: () => S._val === v && v.i === i && !v.busy }); });
+    } else if (S._val.i < VAL_PTS.length && S._calAuto && S._val.armedFor !== S._val.i && !S._val.busy) {
+      const v = S._val, i = v.i; v.armedFor = i;
+      autoArm(measureValPoint, { screen: "validate", still: () => S._val === v && v.i === i && !v.busy });
     }
     stage(host, "Checking how accurate the camera is for this student");
   },
@@ -18093,9 +18360,11 @@ add({ id:"validate", block:"gaze", bar:"off", skipIf: () => !(gazeOn() && GAZE.c
       w.appendChild(el("p", { class:"lede", text:"Ask the child to look at the red dot. When they are looking at it, press the button below and keep them looking for a moment." }));
       w.appendChild(el("div", { class:"notice", text:"Dot " + (n + 1) + " of " + VAL_PTS.length + ". Unlike calibration, these dots do not teach the camera anything; they test what it already learned." }));
       w.appendChild(el("button", { class:"btn", style:"width:100%",
-        text: S._val.busy ? "Measuring…" : "They are looking at the dot",
-        onclick: () => measureValPoint() }));
-      KEYS.set({ " ": () => measureValPoint() });
+        text: S._val.busy ? "Measuring… keep looking" : "They are looking at the dot",
+        onclick: () => measureValPoint("educator") }));
+      KEYS.set({ " ": () => measureValPoint("educator") });
+      w.appendChild(liveFaceLine());
+      w.appendChild(autoToggle());
     } else {
       const v = GAZE.validation;
       const pass = v && v.meets_protocol;
@@ -18107,8 +18376,13 @@ add({ id:"validate", block:"gaze", bar:"off", skipIf: () => !(gazeOn() && GAZE.c
               : "<strong>Does not meet the rule.</strong>") }));
       if (!pass) {
         if (attemptsLeft() > 0) {
-          w.appendChild(el("button", { class:"btn", style:"width:100%;margin-bottom:8px", text:"Recalibrate (" + attemptsLeft() + " attempt" + (attemptsLeft() > 1 ? "s" : "") + " left)", onclick:() => recalibrate(null) }));
-          w.appendChild(el("p", { class:"hint", text:"Before recalibrating: check the framing (face in the middle, not backlit), and ask the child to keep their head still." }));
+          w.appendChild(el("button", { class:"btn", style:"width:100%;margin-bottom:8px", text:"Add more calibration dots (" + attemptsLeft() + " attempt" + (attemptsLeft() > 1 ? "s" : "") + " left)", onclick:() => recalibrate(null, false) }));
+          w.appendChild(el("button", { class:"speak", text:"Start calibration again from scratch", onclick:() => recalibrate(null, true) }));
+          w.appendChild(el("p", { class:"hint", text:"Add more dots keeps what the camera has learned and teaches nine more: usually best. Start from scratch if the child changed seat or the screen or lights were moved. Before either: check the face is inside the oval on the portal video, not backlit, and ask the child to keep their head still." }));
+          if (v && v.per_point_error_px) {
+            const worst = v.per_point_error_px.indexOf(Math.max.apply(null, v.per_point_error_px));
+            w.appendChild(el("p", { class:"hint", text:"Per-dot error (px): " + v.per_point_error_px.join(", ") + ". Worst: dot " + (worst + 1) + "." }));
+          }
         } else {
           w.appendChild(el("div", { class:"notice", text:"The recalibration limit is reached. Press Next: eye tracking is switched off for the rest of this session, as the protocol says. The video keeps recording, so the session can still be re-analysed later." }));
         }
@@ -18140,8 +18414,9 @@ add({ id:"validate", block:"gaze", bar:"off", skipIf: () => !(gazeOn() && GAZE.c
 function driftScreen(id, before) {
   add({ id, block:"gaze", bar:"off", skipIf: () => !(gazeOn() && GAZE.calibrated),
     enter: () => { S._drift = S._drift || {}; say("Look at the dot in the middle."); },
+    focus: () => !(S._drift && S._drift[id]),
     stageFn: () => {
-      const host = el("div", { style:"position:relative;width:100%;height:100%;min-height:420px" });
+      const host = el("div", { class:"dothost" });
       host.appendChild(el("div", { class:"valdot", style:"left:50%;top:50%", "aria-hidden":"true" }));
       stage(host, "Quick check before " + before);
       if (!S._drift[id + "_onset"]) requestAnimationFrame(rt => { S._drift[id + "_onset"] = CLOCK.fromPerf(rt); EV.log("drift_target_onset", { check:id }, S._drift[id + "_onset"]); });
@@ -18153,13 +18428,14 @@ function driftScreen(id, before) {
       w.appendChild(el("h1", { text:"Still accurate?" }));
       if (!d) {
         w.appendChild(el("p", { class:"lede", text:"Ask the child to look at the dot in the middle, then press the button and keep them looking for a second." }));
-        w.appendChild(el("button", { class:"btn", style:"width:100%", text: S._drift.busy ? "Measuring…" : "They are looking at the dot", onclick:() => measureDrift(id) }));
+        w.appendChild(el("button", { class:"btn", style:"width:100%", text: S._drift.busy ? "Measuring… keep looking" : "They are looking at the dot", onclick:() => measureDrift(id) }));
         KEYS.set({ " ": () => measureDrift(id) });
+        w.appendChild(liveFaceLine());
       } else {
         const over = d.offset_deg === null || d.offset_deg > PROTOCOL.drift_max_deg;
         w.appendChild(el("div", { class: over ? "notice bad" : "notice ok", text: d.offset_deg === null ? "No gaze estimate arrived." :
           "Drift " + d.offset_px + " px (" + d.offset_deg + "°). Limit " + PROTOCOL.drift_max_deg + "°. " + (over ? "Above the limit." : "Fine, carry on.") }));
-        if (over && attemptsLeft() > 0) w.appendChild(el("button", { class:"btn", style:"width:100%;margin-bottom:8px", text:"Quick recalibration", onclick:() => { d.action = "recalibrate"; S.drift.push(Object.assign({}, d)); recalibrate(id); } }));
+        if (over && attemptsLeft() > 0) w.appendChild(el("button", { class:"btn", style:"width:100%;margin-bottom:8px", text:"Quick recalibration (adds nine dots)", onclick:() => { d.action = "recalibrate"; S.drift.push(Object.assign({}, d)); recalibrate(id, false); } }));
         if (over) w.appendChild(el("p", { class:"hint", text:"Or press Next to continue as is. Either way it is recorded, and the drift travels with every gaze row of the next block." }));
         w.appendChild(el("button", { class:"speak", text:"Measure again", onclick:() => { S._drift[id] = null; paint(); } }));
       }
@@ -18183,7 +18459,9 @@ function measureDrift(id) {
   S._drift.busy = true; paint();
   GAZE.start("drift");
   setTimeout(() => {
-    const sm = GAZE.peek(), lost = GAZE.lostCount(); GAZE.stop();
+    // v5.1: the first 350 ms after the button are the eyes landing and the
+    // tracker's smoothing catching up; they measure lag, not drift.
+    const sm = GAZE.peek().filter(q => q.t_perf >= click + VAL_SETTLE_MS), lost = GAZE.lostCount(click + VAL_SETTLE_MS); GAZE.stop();
     const med = a => { if (!a.length) return null; const b = a.slice().sort((x, y) => x - y); return b[Math.floor(b.length / 2)]; };
     const mx = med(sm.map(q => q.x)), my = med(sm.map(q => q.y));
     const px = mx === null ? null : Math.round(Math.hypot(mx - target.x, my - target.y));
@@ -18196,12 +18474,17 @@ function measureDrift(id) {
       n_samples:sm.length, median_x:mx, median_y:my, error_px:px, error_deg:S._drift[id].offset_deg,
       samples_json: JSON.stringify(sm.map(q => [q.x, q.y, q.t_perf])) });
     S._drift.busy = false; paint();
-  }, 1000);
+  }, VAL_SETTLE_MS + 1200);
 }
 
-/* Collect ~1.2s of predictions against the current target, then advance. */
-function measureValPoint() {
+/* Collect predictions against the current target, then advance. v5.1: the
+   first VAL_SETTLE_MS after the button are dropped (the eyes landing on the
+   dot and the tracker's smoothing catching up are lag, not inaccuracy), then
+   1.5 s is measured. Samples with no face count as lost. */
+const VAL_SETTLE_MS = 350, VAL_WINDOW_MS = 1500;
+function measureValPoint(source) {
   if (S._val.busy) return;
+  clearTimeout(CAL_AUTO_T);
   const i = S._val.i;
   const host = $("#stage .valdot");
   const dots = document.querySelectorAll("#stage .valdot");
@@ -18210,11 +18493,11 @@ function measureValPoint() {
   const r = node.getBoundingClientRect();
   const target = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
   const clickT = CLOCK.t();
-  EV.log("validation_target_measure", { index: i, x: Math.round(target.x), y: Math.round(target.y) }, clickT);
+  EV.log("validation_target_measure", { index: i, x: Math.round(target.x), y: Math.round(target.y), source: source || "educator" }, clickT);
   S._val.busy = true; paint();
   GAZE.start("validation");
   setTimeout(() => {
-    const samples = GAZE.peek(), lost = GAZE.lostCount();
+    const samples = GAZE.peek().filter(q => q.t_perf >= clickT + VAL_SETTLE_MS), lost = GAZE.lostCount(clickT + VAL_SETTLE_MS);
     GAZE.stop();
     const med = a => { if (!a.length) return null; const b = a.slice().sort((x, y) => x - y); return b[Math.floor(b.length / 2)]; };
     const mx = med(samples.map(s => s.x)), my = med(samples.map(s => s.y));
@@ -18229,7 +18512,7 @@ function measureValPoint() {
     S._val.i++; S._val.busy = false;
     if (S._val.i >= VAL_PTS.length) computeValidation();
     paint();
-  }, 1200);
+  }, VAL_SETTLE_MS + VAL_WINDOW_MS);
 }
 function computeValidation() {
   const good = S._val.pts.filter(p => p.pred && p.n >= 5);
@@ -19460,6 +19743,9 @@ const KEYS = (function () {
   addEventListener("keydown", e => {
     if (/^(INPUT|TEXTAREA|SELECT)$/.test((e.target.tagName || "").toUpperCase())) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
+    // v5.1: with the portal in control, the child's keyboard does nothing.
+    if (document.body.classList.contains("remote")) { e.preventDefault(); return; }
+    if (document.body.classList.contains("focus") && e.key === "Escape") { S._focusOff = true; paint(); e.preventDefault(); return; }
     if ($("#imodal").classList.contains("on")) {
       if (e.key === "Escape") { $("#imodal").classList.remove("on"); e.preventDefault(); }
       return;
@@ -19468,7 +19754,12 @@ const KEYS = (function () {
     if (e.key === "ArrowRight" || e.key === "Enter") { if (!$("#next").disabled && !$("#next").classList.contains("hide")) { go(1); e.preventDefault(); } }
     if (e.key === "ArrowLeft") { if (!$("#back").disabled) { go(-1); e.preventDefault(); } }
   });
-  return { set(m) { map = m || {}; }, clear() { map = {}; } };
+  function press(k) {
+    if (map[k]) { map[k](); return; }
+    if (k === "ArrowRight" || k === "Enter") { if (!$("#next").disabled && !$("#next").classList.contains("hide")) go(1); }
+    if (k === "ArrowLeft") { if (!$("#back").disabled) go(-1); }
+  }
+  return { set(m) { map = m || {}; }, clear() { map = {}; }, press };
 })();
 
 /* =========================================================================
@@ -19502,6 +19793,7 @@ function saveBackup() {
       // v5
       v5: { link: S.link, consent: S.consent, video: S.video, physical: S.physical, framing: S.framing, drift: S.drift,
         calibration_attempts: S.calibration_attempts, breaks: S.breaks, validations: S.validations || [],
+        preview: S.preview || null, remote: S.remote || null, cal_auto: !!S._calAuto,
         started_at: S.started_at, session_time_origin_ms: CLOCK.origin, clock_epochs: CLOCK.epochs,
         segments: REC.segments, frame_index: FRAMES.current(), cam_setup: S._camSetup || null, started: !!S._started, bs: S._bs || null, drift_state: S._drift || null }
     }));
@@ -19529,7 +19821,8 @@ function restoreBackup(b) {
   GAZE.validation = b.validation || null;
   GAZE.calibrated = !!(b.calib && b.calib.done >= 9);
   const v = b.v5 || {};
-  ["link","consent","video","physical","framing","drift","breaks","validations"].forEach(k => { if (v[k] !== undefined) S[k] = v[k]; });
+  ["link","consent","video","physical","framing","drift","breaks","validations","preview","remote"].forEach(k => { if (v[k] !== undefined && v[k] !== null) S[k] = v[k]; });
+  S._calAuto = !!v.cal_auto;
   S.calibration_attempts = v.calibration_attempts || 0;
   if (v.started_at) S.started_at = v.started_at;
   if (v.session_time_origin_ms) CLOCK.resume(v.session_time_origin_ms, v.clock_epochs);
@@ -19566,6 +19859,7 @@ async function resumeV5() {
   await sessionStarted();
   const salvaged = await REC.salvage(S.session_id, S._resumeSegments || []);
   EV.log("session_resumed", { rows_batches_restored: n, video_parts_salvaged: salvaged });
+  if (S.link.joined) { try { REMOTE.start(); } catch (e) {} }
   if (S.video.consented && !S.video.deleted && S._camSetup === "open") {
     const ok = await CAM.open();
     if (ok) { await REC.start(S.session_id, "resume_after_reload"); await SYNC.flash("recording_resume"); }
@@ -19638,6 +19932,10 @@ function paint() {
   $("#next").classList.toggle("hide", !!s.last);
   $("#stop").classList.toggle("hide", !(S.mode === "child" && !s.last && S._started));
   validate();
+  // v5.1: dots full screen (no educator panel beside them) while targets remain
+  document.body.classList.toggle("focus", !!(s.focus && s.focus() && !S._focusOff));
+  try { REMOTE.afterPaint(); } catch (e) {}
+  try { PREVIEW.paintButton(); } catch (e) {}
   announce("Screen " + (idx + 1) + " of " + list.length);
 }
 /* Annexure 2 (2.2) and the educator briefing both tell the student that no
@@ -19675,6 +19973,7 @@ function leaving(s) {
 }
 function entering(n, how) {
   CUR_SCREEN = { id: n.id, block: n.block || null };
+  S._focusOff = false;
   HOVER.reset();
   EV.log("screen_enter", { screen: n.id, index: idx + 1, how });
   try { REC.onScreen(n.block || null); } catch (e) {}
@@ -19765,9 +20064,377 @@ function boot() {
 FONTHEALTH.ready().then(boot).catch(boot);
 setTimeout(boot, 3000);
 
+/* =========================================================================
+   v5.1 · CAMERA PREVIEW ON THE PARTICIPANT SCREEN
+   -------------------------------------------------------------------------
+   A small mirrored picture of the camera, with the framing oval and the face
+   box drawn on it, in the bottom-left corner of the laptop screen. Three
+   modes, chosen by the educator (portal or laptop footer):
 
-/* generated by build.py from src/data_dictionary.json */
-const DATA_DICTIONARY = {"_about": "GLIDE instrument v5 data dictionary, schema 4.0.0. One row per column of every CSV a session exports. t_perf is always milliseconds since the session time origin (manifest.clock), continuous across a crash-and-resume; utc_ms = session_time_origin_ms + t_perf. Every file is keyed by session_id and child_id via its folder; responses.csv also carries them per row.", "columns": [["responses.csv", "child_id", "string", "", "Child code entered or received from the admin device. Never a name."], ["responses.csv", "educator_id", "string", "", "Educator code."], ["responses.csv", "session_id", "string", "", "Session identifier; also the Drive folder suffix."], ["responses.csv", "mode", "string", "", "child | educator."], ["responses.csv", "instrument_version", "string", "", "Build that produced the row, e.g. glide-p1-child-v5.0.0."], ["responses.csv", "block", "string", "", "Measurement block, e.g. C_typeface, F_distraction, gaze, camera, physical, consent, ED_weights."], ["responses.csv", "item", "string", "", "What was recorded, e.g. pairwise, child_feeling, framing_check, drift_check, item_skipped."], ["responses.csv", "value", "any", "", "The answer. Objects are JSON. For three-face ratings 0 = fine, 1 = a bit much, 2 = too much."], ["responses.csv", "labels", "json", "", "Human-readable labels for coded values where they exist."], ["responses.csv", "winner", "string", "", "Pairwise: the chosen item id (null on a tie)."], ["responses.csv", "loser", "string", "", "Pairwise: the item not chosen (null on a tie)."], ["responses.csv", "tie", "bool", "", "Pairwise: the child said they look the same."], ["responses.csv", "comparison", "string", "", "Pairwise dimension: font, size, colour, lead, track, textlevel."], ["responses.csv", "distractor_id", "string", "", "X1..X6, distractor shown on that screen."], ["responses.csv", "page", "string", "", "Layout screen: busy | calm."], ["responses.csv", "variant", "string", "", "Text screen: dense | plain."], ["responses.csv", "adaptation", "string", "", "Educator backlog item being rated."], ["responses.csv", "felt_load", "int", "0-2", "Three-face rating attached to a reading row."], ["responses.csv", "passage", "string", "", "R1 | R2, which reading passage."], ["responses.csv", "settings", "string", "", "default | own_choices for the two reads."], ["responses.csv", "gaze_usable", "bool", "", "At least 10 gaze samples were collected on that screen."], ["responses.csv", "gaze_samples", "int", "count", "Valid gaze samples on that screen."], ["responses.csv", "duration_ms", "int", "ms", "Gaze sampling duration on that screen."], ["responses.csv", "outside_share", "float", "0-1", "Share of gaze samples outside every zone."], ["responses.csv", "latency_ms", "int", "ms", "Time from screen entry to the moment the answer was logged."], ["responses.csv", "session_elapsed_ms", "int", "ms", "Time since the session start (setup screen left)."], ["responses.csv", "ts", "iso8601", "", "Wall-clock time of the log entry (human reading only; join on t_perf)."], ["responses.csv", "stimulus_hash", "string", "", "Hash of the session's live typography parameters at log time."], ["responses.csv", "t_perf", "float", "ms", "Shared clock time of the log entry. Join key to frames, gaze, events, video."], ["responses.csv", "frame_index", "int", "", "Most recent camera frame index (frames.csv) at log time; empty if no camera."], ["responses.csv", "screen_id", "string", "", "Screen id the response was given on."], ["pairs.csv", "child_id", "string", "", "Child code."], ["pairs.csv", "dimension", "string", "", "font | size | colour | lead | track | textlevel."], ["pairs.csv", "item_a", "string", "", "Item shown on top (position 1)."], ["pairs.csv", "item_b", "string", "", "Item shown at the bottom (position 2)."], ["pairs.csv", "winner", "string", "", "Chosen item, empty on a tie."], ["pairs.csv", "loser", "string", "", "Not-chosen item, empty on a tie."], ["pairs.csv", "tie", "bool", "", "They look the same to me."], ["pairs.csv", "winner_position", "string", "", "top | bottom, for modelling position bias."], ["pairs.csv", "latency_ms", "int", "ms", "Decision latency."], ["pairs.csv", "stimulus_hash_a", "string", "", "Hash of the rendered parameters of item_a."], ["pairs.csv", "stimulus_hash_b", "string", "", "Hash of the rendered parameters of item_b."], ["pairs.csv", "ts", "iso8601", "", "Wall-clock time."], ["pairs.csv", "t_perf", "float", "ms", "Shared clock time of the choice."], ["gaze_zones.csv", "child_id", "string", "", "Child code."], ["gaze_zones.csv", "screen", "string", "", "Logged item the zones belong to."], ["gaze_zones.csv", "block", "string", "", "Block of that screen."], ["gaze_zones.csv", "distractor_id", "string", "", "Distractor on that screen, if any."], ["gaze_zones.csv", "settings", "string", "", "default | own_choices for reading screens."], ["gaze_zones.csv", "passage", "string", "", "Passage id for reading screens."], ["gaze_zones.csv", "zone_id", "string", "", "text | distractor (whole regions only)."], ["gaze_zones.csv", "x", "int", "css px", "Zone left, viewport coordinates."], ["gaze_zones.csv", "y", "int", "css px", "Zone top."], ["gaze_zones.csv", "w", "int", "css px", "Zone width."], ["gaze_zones.csv", "h", "int", "css px", "Zone height."], ["gaze_zones.csv", "samples", "int", "count", "Valid samples inside the zone."], ["gaze_zones.csv", "share", "float", "0-1", "Share of the screen's samples inside the zone."], ["gaze_zones.csv", "dwell_ms", "int", "ms", "share x sampling duration."], ["gaze_zones.csv", "visits", "int", "count", "Separate entries into the zone (coarse excursions, not fixations)."], ["gaze_zones.csv", "first_entry_ms", "int", "ms", "Time from sampling start to the first sample in the zone."], ["gaze_zones.csv", "validation_error_px", "int", "css px", "This participant's measured accuracy."], ["gaze_zones.csv", "validation_error_deg", "float", "deg", "Same, in degrees (see manifest for pitch and distance method)."], ["gaze_zones.csv", "zone_separation_px", "int", "css px", "Smallest centre-to-centre distance between zones on that screen."], ["gaze_zones.csv", "separation_exceeds_error", "bool", "", "Zones further apart than the measured error."], ["gaze_zones.csv", "interpretable", "bool", "", "true only if the between-zone contrast is resolvable; empty = not applicable (single zone)."], ["events.csv", "t_perf", "float", "ms", "Shared clock time of the event (rAF time for onsets and flashes)."], ["events.csv", "type", "string", "", "screen_enter, screen_leave, stimulus_onset, response, sync_flash_on/off, recording_segment_start/stop, break_start/end, visibility, window_blur/focus, resize, scroll, calibration_target_onset/click/offset, validation_target_onset, drift_target_onset, gaze_sampling_start/stop, camera_*, recorder_*, upload_*, admin_command, hover_dwell, and others."], ["events.csv", "screen_id", "string", "", "Screen on display when the event happened."], ["events.csv", "block", "string", "", "Block of that screen."], ["events.csv", "detail", "json", "", "Event-specific fields (e.g. stimulus_dom_hash and mean_rel_luminance on stimulus_onset)."], ["frames.csv", "frame_index", "int", "", "Running index of presented camera frames, from 1."], ["frames.csv", "t_perf", "float", "ms", "Shared clock time when the frame callback ran."], ["frames.csv", "media_time_s", "float", "s", "Frame's media time from requestVideoFrameCallback."], ["frames.csv", "capture_time_perf", "float", "ms", "Camera capture time on the shared clock, where the browser reports it."], ["frames.csv", "expected_display_time_perf", "float", "ms", "When the browser expected to display the frame, shared clock."], ["frames.csv", "presented_frames", "int", "", "Browser's presented-frame counter; gaps mean dropped frames."], ["frames.csv", "dropped_before", "int", "count", "Frames missing between this and the previous callback."], ["frames.csv", "segment", "int", "", "Video part number being recorded at that moment (empty if not recording)."], ["frames.csv", "width", "int", "px", "Frame width."], ["frames.csv", "height", "int", "px", "Frame height."], ["face_quality.csv", "t_perf", "float", "ms", "Shared clock time of the face-model result."], ["face_quality.csv", "frame_index", "int", "", "Latest camera frame index at that time."], ["face_quality.csv", "face_detected", "bool", "", "The face mesh found a face."], ["face_quality.csv", "box_x", "int", "model px", "Face box left, in the tracker image (img_w x img_h)."], ["face_quality.csv", "box_y", "int", "model px", "Face box top."], ["face_quality.csv", "box_w", "int", "model px", "Face box width."], ["face_quality.csv", "box_h", "int", "model px", "Face box height."], ["face_quality.csv", "img_w", "int", "px", "Width of the image the model ran on (may be smaller than the recorded video)."], ["face_quality.csv", "img_h", "int", "px", "Height of that image."], ["face_quality.csv", "landmark_confidence", "float", "", "Not reported by this face-mesh runtime; always empty, kept for schema stability."], ["face_quality.csv", "yaw_deg", "float", "deg", "Approximate head yaw from landmark depth (flagging only)."], ["face_quality.csv", "pitch_deg", "float", "deg", "Approximate head pitch."], ["face_quality.csv", "roll_deg", "float", "deg", "Head roll from the eye-corner line."], ["face_quality.csv", "ear_left", "float", "ratio", "Eye aspect ratio, left eye (vertical / horizontal opening)."], ["face_quality.csv", "ear_right", "float", "ratio", "Eye aspect ratio, right eye."], ["face_quality.csv", "eyes_closed", "bool", "", "Both EARs below the protocol threshold (manifest.protocol.ear_closed)."], ["face_quality.csv", "interocular_px", "float", "model px", "Distance between eye centres; a per-frame distance proxy."], ["face_quality.csv", "distance_ratio", "float", "ratio", "Interocular px at calibration / now. >1 means further from the screen than at calibration."], ["face_quality.csv", "face_brightness", "int", "0-255", "Mean luma inside the face box (every third row)."], ["face_quality.csv", "bg_brightness", "int", "0-255", "Mean luma outside the face box; much brighter than the face = backlit."], ["face_quality.csv", "screen_id", "string", "", "Screen on display."], ["gaze.csv", "t_perf", "float", "ms", "Shared clock time of the gaze callback."], ["gaze.csv", "x", "int", "css px", "Estimated gaze x, viewport coordinates. Empty when invalid."], ["gaze.csv", "y", "int", "css px", "Estimated gaze y."], ["gaze.csv", "valid", "bool", "", "false = the tracker produced no estimate for that callback (counts toward data loss)."], ["gaze.csv", "screen_id", "string", "", "Screen on display."], ["gaze.csv", "phase", "string", "", "calibration | validation | drift | the screen id of a measured screen."], ["gaze.csv", "calibration_attempt", "int", "", "Calibration attempt in effect."], ["gaze.csv", "validation_error_deg", "float", "deg", "Accuracy of the validation in effect at that time."], ["gaze.csv", "validation_meets_protocol", "bool", "", "That validation met the pre-declared thresholds."], ["calibration.csv", "attempt", "int", "", "Calibration attempt (1 = first; at most 1 + max_recalibrations)."], ["calibration.csv", "kind", "string", "", "calibration | validation | drift."], ["calibration.csv", "point_index", "int", "", "Index into the 3x3 grid (calibration) or the 5 validation points."], ["calibration.csv", "order", "int", "", "Position in the randomised presentation order."], ["calibration.csv", "target_x", "int", "css px", "Target centre, viewport coordinates."], ["calibration.csv", "target_y", "int", "css px", "Target centre."], ["calibration.csv", "onset_t_perf", "float", "ms", "Target first painted (rAF)."], ["calibration.csv", "click_t_perf", "float", "ms", "Educator pressed 'looking now'."], ["calibration.csv", "offset_t_perf", "float", "ms", "Target removed / measurement ended."], ["calibration.csv", "n_samples", "int", "count", "Valid gaze predictions during the dwell."], ["calibration.csv", "median_x", "int", "css px", "Median predicted x during the dwell."], ["calibration.csv", "median_y", "int", "css px", "Median predicted y."], ["calibration.csv", "error_px", "int", "css px", "Distance between median prediction and target."], ["calibration.csv", "error_deg", "float", "deg", "Same in degrees (validation and drift only)."], ["calibration.csv", "samples_json", "json", "", "Raw predictions [x, y, t_perf] during the dwell; for calibration rows also the t_perf of each training sample. With the video, this is ground truth for offline re-calibration."], ["aoi.csv", "t_perf", "float", "ms", "When the boxes were measured."], ["aoi.csv", "screen_id", "string", "", "Screen."], ["aoi.csv", "reason", "string", "", "onset | resize | scroll."], ["aoi.csv", "aoi_id", "string", "", "Region name (card, main_text, ad, sidebar, popup, chat, bottom_bar, nav, opt_pair, ...); _n suffix for repeats."], ["aoi.csv", "selector", "string", "", "CSS selector the region was measured from."], ["aoi.csv", "x", "int", "css px", "Left, viewport coordinates (same frame as gaze)."], ["aoi.csv", "y", "int", "css px", "Top."], ["aoi.csv", "w", "int", "css px", "Width."], ["aoi.csv", "h", "int", "css px", "Height."], ["aoi.csv", "scroll_x", "int", "css px", "Stage scroll offset at measurement."], ["aoi.csv", "scroll_y", "int", "css px", "Panel scroll offset at measurement."], ["aoi.csv", "viewport_w", "int", "css px", "Viewport width."], ["aoi.csv", "viewport_h", "int", "css px", "Viewport height."], ["pointer.csv", "t_perf", "float", "ms", "Event time."], ["pointer.csv", "type", "string", "", "move (throttled to 20 Hz) | down | up."], ["pointer.csv", "x", "int", "css px", "Pointer x."], ["pointer.csv", "y", "int", "css px", "Pointer y."], ["pointer.csv", "buttons", "int", "", "Pressed-buttons bitmask."], ["pointer.csv", "pointer_type", "string", "", "mouse | touch | pen."], ["pointer.csv", "target", "string", "", "Coarse element under the pointer."], ["pointer.csv", "screen_id", "string", "", "Screen."], ["video_segments.csv", "segment", "int", "", "Part number; file video/part_NNN.webm."], ["video_segments.csv", "file", "string", "", "Path of the part inside the session folder."], ["video_segments.csv", "mime", "string", "", "Container and codec actually used."], ["video_segments.csv", "reason_start", "string", "", "consent | block_change:<block> | max_length | restart_after_error | resume_after_reload."], ["video_segments.csv", "reason_stop", "string", "", "Why the part ended (session_end, withdrawn, camera_lost, crash_salvaged, ...)."], ["video_segments.csv", "start_t_perf", "float", "ms", "Recorder start event; the part's media time 0 is at or just after this."], ["video_segments.csv", "first_chunk_t_perf", "float", "ms", "First 5-second chunk delivered."], ["video_segments.csv", "stop_t_perf", "float", "ms", "Recorder stop."], ["video_segments.csv", "first_frame_index", "int", "", "First frames.csv row recorded in this part."], ["video_segments.csv", "last_frame_index", "int", "", "Last frames.csv row recorded in this part."], ["video_segments.csv", "chunks", "int", "count", "Chunks written."], ["video_segments.csv", "bytes", "int", "bytes", "Part size."], ["video_segments.csv", "screen_at_start", "string", "", "Screen on display when the part began."], ["video_segments.csv", "block", "string", "", "Block when the part began."], ["data_dictionary.csv", "file", "string", "", "File the column belongs to."], ["data_dictionary.csv", "column", "string", "", "Column name."], ["data_dictionary.csv", "type", "string", "", "string | int | float | bool | json | iso8601 | any."], ["data_dictionary.csv", "unit", "string", "", "Unit where one applies."], ["data_dictionary.csv", "description", "string", "", "Meaning."]], "files": [["manifest.json", "Read first. File list with SHA-256 and row counts, versions, consent form version, retention date, clock, protocol thresholds, camera and codec."], ["session.json", "Complete record: every response, derived summaries (profile inputs, CLS weights, quality), environment, consent, physical calibration, video and face summaries."], ["session.partial.json", "Snapshot written every 5 minutes during the session; superseded by session.json."], ["profile.json", "The settings object the extension loads (child or educator half)."], ["stimuli.json", "Exact DOM of every distinct stimulus shown, keyed by stimulus_dom_hash (see events.csv stimulus_onset)."], ["video/part_NNN.webm", "Face video, no audio, one self-contained file per part (block boundaries or 2 minutes)."]]};
+     off    never shown (the framing screens still show their large preview)
+     auto   shown only while the face is out of frame or lost, for long
+            enough to matter (1.5 s), and hidden again 1.5 s after the face is
+            back. The child sees themselves only when they have already left
+            the frame, which is when seeing it helps them come back.
+     on     always shown while the camera is on
+
+   A child watching their own face is a distractor in a study about
+   distraction, so every show and hide is an event on the shared clock
+   (preview_shown / preview_hidden, with the reason) and the total time shown
+   per screen is in session.json. Analysis can drop or flag those stretches.
+   ========================================================================= */
+const PREVIEW = (function () {
+  const KEY = "glide_preview_mode";
+  let mode = "auto";
+  try { const m = localStorage.getItem(KEY); if (m === "off" || m === "auto" || m === "on") mode = m; } catch (e) {}
+  let box = null, vid = null, cv = null, shown = false, shownAt = 0, badSince = null, goodSince = null, timer = null;
+  const SUPPRESS = /^(framing|framing2|done)$/;          // framing screens have their own large preview
+  function build() {
+    if (box) return;
+    box = document.createElement("div"); box.id = "pip"; box.setAttribute("aria-hidden", "true");
+    vid = document.createElement("video"); vid.muted = true; vid.playsInline = true; vid.autoplay = true;
+    cv = document.createElement("canvas");
+    box.appendChild(vid); box.appendChild(cv); document.body.appendChild(box);
+  }
+  function bad(f, fr) {
+    if (!f || CLOCK.t() - f.t_perf > 1500 || !f.face_detected) return "face_lost";
+    const c = fr && fr.checks ? fr.checks : {};
+    if (c.centred && c.centred.g === "r") return "face_off_centre";
+    if (c.distance && c.distance.g === "r") return "distance";
+    return null;
+  }
+  function show(reason) {
+    if (shown) return; build();
+    if (vid.srcObject !== CAM.stream) { vid.srcObject = CAM.stream; try { vid.play(); } catch (e) {} }
+    box.classList.add("on"); shown = true; shownAt = CLOCK.t();
+    EV.log("preview_shown", { mode, reason, screen: CUR_SCREEN.id });
+  }
+  function hide(reason) {
+    if (!shown) return;
+    box.classList.remove("on"); shown = false;
+    const ms = Math.round(CLOCK.t() - shownAt);
+    S.preview = S.preview || { mode_changes: [], shown_ms_by_screen: {} };
+    S.preview.shown_ms_by_screen[CUR_SCREEN.id] = (S.preview.shown_ms_by_screen[CUR_SCREEN.id] || 0) + ms;
+    EV.log("preview_hidden", { mode, reason, shown_ms: ms, screen: CUR_SCREEN.id });
+  }
+  function tick() {
+    const live = CAM.live() && !CAM.lost();
+    const f = FACEQ.latest();
+    if (!live || !f || SUPPRESS.test(CUR_SCREEN.id || "") || S.mode === "training") { hide(!live ? "camera_off" : "screen"); return; }
+    let fr = null; try { fr = FRAMING.evaluate(); } catch (e) {}
+    if (mode === "off") { hide("mode_off"); }
+    else if (mode === "on") { show("mode_on"); }
+    else {
+      const now = performance.now(), why = bad(f, fr);
+      if (why) { goodSince = null; badSince = badSince || now; if (now - badSince > 1500) show(why); }
+      else { badSince = null; goodSince = goodSince || now; if (now - goodSince > 1500) hide("face_back"); }
+    }
+    if (shown) drawFaceOverlay(cv, f, { pass: fr && fr.pass, pts: FACEQ.points(), age_ms: CLOCK.t() - f.t_perf });
+  }
+  return {
+    mode: () => mode,
+    shown: () => shown,
+    setMode(m, source) {
+      if (!/^(off|auto|on)$/.test(m) || m === mode) return;
+      mode = m; try { localStorage.setItem(KEY, m); } catch (e) {}
+      S.preview = S.preview || { mode_changes: [], shown_ms_by_screen: {} };
+      S.preview.mode_changes.push({ mode: m, source: source || "laptop", t_perf: CLOCK.t(), screen: CUR_SCREEN.id });
+      EV.log("preview_mode", { mode: m, source: source || "laptop" });
+      tick(); PREVIEW.paintButton();
+    },
+    start() { if (!timer) timer = setInterval(() => { try { tick(); } catch (e) {} }, 250); },
+    paintButton() {
+      const b = document.getElementById("pvbtn"); if (!b) return;
+      b.classList.toggle("hide", !CAM.live() || S.mode === "training");
+      b.textContent = "Camera preview: " + ({ off: "off", auto: "auto", on: "on" })[mode];
+    }
+  };
+})();
+PREVIEW.start();
+document.getElementById("pvbtn").addEventListener("click", () => {
+  PREVIEW.setMode({ off: "auto", auto: "on", on: "off" }[PREVIEW.mode()], "laptop");
+});
+setInterval(() => { try { PREVIEW.paintButton(); } catch (e) {} }, 1000);
+/* =========================================================================
+   v5.1 · EDUCATOR PORTAL LINK (participant side)
+   -------------------------------------------------------------------------
+   With the educator portal (educator.html) open on a second device, the
+   participant laptop shows ONLY what the child should see: the two things
+   to compare, the reading passages, the dots. Every educator control (the
+   question, "top one / bottom one / the same", Next, Back, Stop, the
+   framing checks) appears on the portal instead, next to a live view of the
+   camera with the framing oval drawn on it.
+
+   How it works. The instrument keeps running here, exactly as before: every
+   screen still renders its educator panel, only now that panel is hidden on
+   the laptop and mirrored to the portal. A click or keystroke on the portal
+   comes back as an action on the same element here, so every existing
+   screen works remotely without being rewritten, and every response is still
+   logged on this laptop's clock.
+
+   Transport. A direct WebRTC connection between the two devices: one data
+   channel for the panel and actions (tens of milliseconds, not the seconds a
+   round trip through Apps Script takes), and one video track, a 640x480
+   15 fps copy of the camera, the same frame the face model sees. Nothing is
+   recorded on the portal. The study backend only passes the two connection
+   offers between the devices (op "signal"); no video goes through it.
+
+   If the portal disconnects, the laptop keeps the child view and shows a
+   small banner; Ctrl+Shift+E brings the controls back onto the laptop at
+   any time. Without a portal, nothing changes: the laptop works as before.
+   ========================================================================= */
+const REMOTE = (function () {
+  const ICE = [{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:stun1.l.google.com:19302" }];
+  let pc = null, dc = null, pending = null, handledHello = null, pollT = null, started = false;
+  let open = false, local = false, sendTrack = null, sender = null, obs = null, snapT = null, faceT = null, lastHtml = null;
+  let lostAt = null, connects = 0, actions = 0, startedAt = Date.now();
+
+  const isOpen = () => !!(dc && dc.readyState === "open");
+  function controlling() { return open && !local; }
+  function applyBody() {
+    document.body.classList.toggle("remote", controlling());
+    const b = document.getElementById("rbanner");
+    if (b) {
+      const lost = !open && connects > 0 && !local;
+      b.classList.toggle("on", lost);
+      b.textContent = lost ? "Educator portal disconnected, reconnecting… (Ctrl+Shift+E shows the controls on this laptop)" : "";
+    }
+  }
+  function send(o) { if (!isOpen()) return false; try { dc.send(JSON.stringify(o)); return true; } catch (e) { return false; } }
+
+  /* ------------------------------------------------------------ signalling */
+  async function poll() {
+    pollT = null;
+    if (!S.link.joined || !LINK.configured()) return schedule(5000);
+    try {
+      const j = await LINK.call("signal", { session_id: S.session_id, get: "educator" }, 10000);
+      const m = j.msg;
+      if (m && m.type === "hello" && m.id && m.id !== handledHello) { handledHello = m.id; await offer(m.id); }
+      else if (m && m.type === "answer" && pending && m.id === pending.id && !pending.answered) {
+        pending.answered = true;
+        try { await pc.setRemoteDescription({ type: "answer", sdp: m.sdp }); EV.log("educator_portal_answer", { id: m.id }); }
+        catch (e) { EV.log("educator_portal_error", { step: "answer", error: String(e && e.message || e) }); }
+      }
+    } catch (e) {}
+    // Fast while a connection is being made; slower once connected, or when
+    // no portal has appeared after two minutes (most sessions may not use one).
+    schedule(isOpen() ? 15000 : (pending && !pending.answered) ? 1500 : (Date.now() - startedAt < 120000 || connects > 0) ? 3000 : 8000);
+  }
+  function schedule(ms) { clearTimeout(pollT); pollT = setTimeout(poll, ms); }
+
+  function closePc() {
+    try { if (dc) dc.close(); } catch (e) {}
+    try { if (pc) pc.close(); } catch (e) {}
+    pc = null; dc = null; sender = null; open = false;
+  }
+  async function offer(id) {
+    closePc();
+    pc = new RTCPeerConnection({ iceServers: ICE });
+    dc = pc.createDataChannel("glide", { ordered: true });
+    wire(dc);
+    sender = pc.addTransceiver("video", { direction: "sendonly" }).sender;
+    attachCamera(true);
+    pc.addEventListener("connectionstatechange", () => {
+      const st = pc && pc.connectionState;
+      EV.log("educator_portal_state", { state: st });
+      if (st === "failed" || st === "closed") { open = false; lostAt = lostAt || Date.now(); applyBody(); }
+    });
+    pending = { id, answered: false, at: Date.now() };
+    const o = await pc.createOffer(); await pc.setLocalDescription(o);
+    await new Promise(res => {
+      if (pc.iceGatheringState === "complete") return res();
+      pc.addEventListener("icegatheringstatechange", () => { if (pc && pc.iceGatheringState === "complete") res(); });
+      setTimeout(res, 3000);
+    });
+    await LINK.call("signal", { session_id: S.session_id, role: "laptop", put: { type: "offer", id, sdp: pc.localDescription.sdp } }, 15000);
+    EV.log("educator_portal_offer", { id });
+  }
+  function wire(ch) {
+    ch.addEventListener("open", () => {
+      open = true; connects++; lostAt = null; pending = null; lastHtml = null;
+      EV.log("educator_portal_connected", { connects });
+      S.remote = S.remote || { connections: [], actions: 0 };
+      S.remote.connections.push({ connected_t_perf: CLOCK.t() });
+      applyBody(); sendAll();
+      try { paint(); } catch (e) {}
+    });
+    ch.addEventListener("close", () => {
+      if (!open) return;
+      open = false; lostAt = Date.now();
+      EV.log("educator_portal_disconnected", {});
+      const c = S.remote && S.remote.connections[S.remote.connections.length - 1]; if (c) c.disconnected_t_perf = CLOCK.t();
+      applyBody(); schedule(1000);
+    });
+    ch.addEventListener("message", e => { let m; try { m = JSON.parse(e.data); } catch (x) { return; } onMsg(m); });
+  }
+
+  /* --------------------------------------------------------------- camera */
+  function attachCamera(force) {
+    if (!sender) return;
+    const want = CAM.live() && !CAM.lost() && S.remote_video !== false;
+    if (want && (!sendTrack || sendTrack.readyState !== "live")) {
+      try {
+        sendTrack = CAM.stream.getVideoTracks()[0].clone();
+        sendTrack.applyConstraints({ width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 15, max: 15 }, resizeMode: "crop-and-scale" }).catch(() => {});
+        sender.replaceTrack(sendTrack).catch(() => {});
+        const p = sender.getParameters(); if (p.encodings && p.encodings[0]) { p.encodings[0].maxBitrate = 600000; sender.setParameters(p).catch(() => {}); }
+        EV.log("educator_portal_video", { on: true });
+      } catch (e) {}
+    } else if (!want && sendTrack) {
+      try { sender.replaceTrack(null); sendTrack.stop(); } catch (e) {}
+      sendTrack = null; EV.log("educator_portal_video", { on: false });
+    } else if (force && sendTrack) { sender.replaceTrack(sendTrack).catch(() => {}); }
+  }
+
+  /* --------------------------------------------------------------- mirror */
+  function sig(n) { return n.tagName + "|" + (n.textContent || "").replace(/\s+/g, " ").trim().slice(0, 24); }
+  function panelHtml() {
+    const panel = document.getElementById("panel");
+    const clone = panel.cloneNode(true);
+    const live = panel.querySelectorAll("*"), cl = clone.querySelectorAll("*");
+    for (let i = 0; i < live.length; i++) {
+      const n = live[i], c = cl[i];
+      c.setAttribute("data-rid", i);
+      if (n.tagName === "INPUT") {
+        if (n.type === "checkbox" || n.type === "radio") { if (n.checked) c.setAttribute("checked", ""); else c.removeAttribute("checked"); }
+        else c.setAttribute("value", n.value);
+      } else if (n.tagName === "TEXTAREA") c.textContent = n.value;
+      else if (n.tagName === "SELECT") Array.from(c.options).forEach((o, k) => { if (n.options[k] && n.options[k].selected) o.setAttribute("selected", ""); else o.removeAttribute("selected"); });
+      else if (n.tagName === "DETAILS") { if (n.open) c.setAttribute("open", ""); else c.removeAttribute("open"); }
+      if (n.disabled) c.setAttribute("disabled", "");
+    }
+    return clone.innerHTML;
+  }
+  function footState() {
+    const q = id => document.getElementById(id);
+    return { back: { disabled: q("back").disabled }, next: { disabled: q("next").disabled, hidden: q("next").classList.contains("hide") },
+      stop: { hidden: q("stop").classList.contains("hide") }, ptxt: q("ptxt").textContent, pct: q("pbar").style.width };
+  }
+  function screenInfo() {
+    let list = [], s = {};
+    try { list = visible(); s = list[idx] || {}; } catch (e) {}
+    return { id: s.id || null, block: s.block || null, index: idx + 1, total: list.length, mode: S.mode,
+      child_id: S.child_id, educator_id: S.educator_id, session_id: S.session_id, bar: (document.getElementById("bar") || {}).textContent || "",
+      recording: REC.recording(), camera: CAM.live(), video_consented: S.video.consented, preview: PREVIEW.mode(),
+      laptop_vw: innerWidth, laptop_vh: innerHeight, version: INSTRUMENT_VERSION };
+  }
+  function sendPanel(force) {
+    if (!isOpen()) return;
+    const html = panelHtml();
+    const msg = { t: "panel", html, foot: footState(), screen: screenInfo() };
+    const key = html + JSON.stringify(msg.foot) + msg.screen.id;
+    if (!force && key === lastHtml) return;
+    lastHtml = key;
+    if (html.length > 240000) msg.html = "<div class='notice bad'>This screen is too large to mirror. Press Ctrl+Shift+E on the laptop to use it there.</div>";
+    send(msg);
+  }
+  function queueSnap() { clearTimeout(snapT); snapT = setTimeout(() => sendPanel(false), 60); }
+  function sendAll() { sendPanel(true); sendFace(); }
+
+  /* Face, framing, gaze target and estimate, ~8 times a second. */
+  function sendFace() {
+    if (!isOpen()) return;
+    attachCamera(false);
+    const f = FACEQ.latest();
+    let fr = null; try { fr = f ? FRAMING.evaluate() : null; } catch (e) {}
+    let tgt = null; try { tgt = currentGazeTarget(); } catch (e) {}
+    const g = GAZE.lastPred ? GAZE.lastPred() : null;
+    send({ t: "face", f: f ? { face_detected: f.face_detected, box_x: f.box_x, box_y: f.box_y, box_w: f.box_w, box_h: f.box_h, img_w: f.img_w, img_h: f.img_h,
+        yaw_deg: f.yaw_deg, pitch_deg: f.pitch_deg, roll_deg: f.roll_deg, ear_left: f.ear_left, ear_right: f.ear_right, eyes_closed: f.eyes_closed,
+        interocular_px: f.interocular_px, distance_ratio: f.distance_ratio, face_brightness: f.face_brightness } : null,
+      age_ms: f ? Math.round(CLOCK.t() - f.t_perf) : null, pts: FACEQ.points(), checks: fr ? fr.checks : null, pass: fr ? !!fr.pass : false,
+      usable: FACEQ.usableNow ? FACEQ.usableNow() : null,
+      target: tgt, gaze: g && CLOCK.t() - g.t_perf < 600 ? { x: g.x, y: g.y } : null,
+      vw: innerWidth, vh: innerHeight, recording: REC.recording(), camera: CAM.live(), preview: PREVIEW.mode(), preview_shown: PREVIEW.shown(),
+      on_break: !!(S.breaks.length && !S.breaks[S.breaks.length - 1].end_t_perf) });
+  }
+
+  /* -------------------------------------------------------------- actions */
+  /* The portal names an element by its position in the panel plus a short
+     signature (tag and text). If the panel changed in between (a list filled
+     in, a notice appeared), the position may have shifted: the element with
+     the same signature nearest that position is the one meant. */
+  function byRid(rid, s) {
+    const all = document.getElementById("panel").querySelectorAll("*");
+    const n = all[rid];
+    if (n && (!s || sig(n) === s)) return n;
+    let best = null, bd = Infinity;
+    if (s) for (let i = 0; i < all.length; i++) if (sig(all[i]) === s && Math.abs(i - rid) < bd) { best = all[i]; bd = Math.abs(i - rid); }
+    if (best) { EV.log("educator_portal_rid_shift", { rid, shift: bd }); return best; }
+    EV.log("educator_portal_action_dropped", { rid, sig: s }); sendPanel(true); return null;
+  }
+  function onMsg(m) {
+    actions++; if (S.remote) S.remote.actions = actions;
+    if (m.t !== "resync") EV.log("educator_portal_action", { t: m.t, rid: m.rid === undefined ? null : m.rid, key: m.key || null, d: m.d || null, screen: CUR_SCREEN.id });
+    switch (m.t) {
+      case "click": { const n = byRid(m.rid, m.sig); if (n) n.click(); break; }
+      case "input": {
+        const n = byRid(m.rid, m.sig); if (!n) break;
+        if (n.type === "checkbox" || n.type === "radio") n.checked = !!m.checked; else n.value = m.value;
+        n.dispatchEvent(new Event("input", { bubbles: true }));
+        n.dispatchEvent(new Event("change", { bubbles: true }));
+        break;
+      }
+      case "toggle": { const n = byRid(m.rid, m.sig); if (n && n.tagName === "DETAILS") n.open = !!m.open; break; }
+      case "key": KEYS.press(m.key); break;
+      case "nav": {
+        const nx = document.getElementById("next"), bk = document.getElementById("back");
+        if (m.d > 0 && !nx.disabled && !nx.classList.contains("hide")) go(1);
+        else if (m.d < 0 && !bk.disabled) go(-1);
+        else sendPanel(true);
+        break;
+      }
+      case "stop":
+        if (m.withdraw) withdrawSession(m.reason || "not given", !!m.delete_video, "educator_portal");
+        else endEarly(m.reason || "not given", "educator_portal");
+        break;
+      case "preview": PREVIEW.setMode(m.mode, "educator_portal"); sendFace(); break;
+      case "video": S.remote_video = !!m.on; attachCamera(false); break;
+      case "local": local = !!m.on; EV.log("educator_controls_on_laptop", { on: local, source: "educator_portal" }); applyBody(); break;
+      case "resync": sendAll(); break;
+    }
+  }
+
+  /* A blocking alert() on the child's screen would freeze the laptop (and
+     this link) until someone walks over to press OK: with the portal in
+     control, the message goes to the portal instead. confirm() and prompt()
+     stay on the laptop on purpose: they guard local, deliberate acts such as
+     clearing the laptop's copy at the very end. */
+  const nativeAlert = window.alert.bind(window);
+  window.alert = msg => { if (controlling() && send({ t: "toast", text: String(msg) })) return; nativeAlert(msg); };
+
+  /* Ctrl+Shift+E on the laptop: controls back here (or away again). */
+  addEventListener("keydown", e => {
+    if (e.ctrlKey && e.shiftKey && (e.key === "E" || e.key === "e")) {
+      e.preventDefault(); e.stopImmediatePropagation();
+      local = !local; EV.log("educator_controls_on_laptop", { on: local, source: "laptop_shortcut" });
+      applyBody(); send({ t: "toast", text: local ? "Controls are now also shown on the laptop." : "Controls are back on the portal only." });
+    }
+  }, true);
+
+  return {
+    start() {
+      if (started || !S.link.joined || typeof RTCPeerConnection === "undefined") return;
+      started = true; startedAt = Date.now();
+      const panel = document.getElementById("panel"), foot = document.getElementById("foot");
+      obs = new MutationObserver(queueSnap);
+      obs.observe(panel, { subtree: true, childList: true, attributes: true, characterData: true });
+      obs.observe(foot, { subtree: true, childList: true, attributes: true, characterData: true });
+      faceT = setInterval(() => { try { sendFace(); } catch (e) {} }, 125);
+      schedule(200);
+      EV.log("educator_portal_listening", { session_id: S.session_id });
+    },
+    controlling, isOpen, send,
+    afterPaint() { if (isOpen()) queueSnap(); applyBody(); },
+    /* The "why we ask this" panel opens on the portal, not on the child's screen. */
+    modal(html) { return controlling() && send({ t: "modal", html }); },
+    toast(text) { return send({ t: "toast", text }); },
+    summary() { return { connects, actions, connected_now: open, controls_on_laptop: local }; }
+  };
+})();
+
+/* generated by tools/build.py from src/data_dictionary.json */
+const DATA_DICTIONARY = {"_about": "GLIDE instrument v5 data dictionary, schema 4.0.0. One row per column of every CSV a session exports. t_perf is always milliseconds since the session time origin (manifest.clock), continuous across a crash-and-resume; utc_ms = session_time_origin_ms + t_perf. Every file is keyed by session_id and child_id via its folder; responses.csv also carries them per row.", "columns": [["responses.csv", "child_id", "string", "", "Child code entered or received from the admin device. Never a name."], ["responses.csv", "educator_id", "string", "", "Educator code."], ["responses.csv", "session_id", "string", "", "Session identifier; also the Drive folder suffix."], ["responses.csv", "mode", "string", "", "child | educator."], ["responses.csv", "instrument_version", "string", "", "Build that produced the row, e.g. glide-p1-child-v5.0.0."], ["responses.csv", "block", "string", "", "Measurement block, e.g. C_typeface, F_distraction, gaze, camera, physical, consent, ED_weights."], ["responses.csv", "item", "string", "", "What was recorded, e.g. pairwise, child_feeling, framing_check, drift_check, item_skipped."], ["responses.csv", "value", "any", "", "The answer. Objects are JSON. For three-face ratings 0 = fine, 1 = a bit much, 2 = too much."], ["responses.csv", "labels", "json", "", "Human-readable labels for coded values where they exist."], ["responses.csv", "winner", "string", "", "Pairwise: the chosen item id (null on a tie)."], ["responses.csv", "loser", "string", "", "Pairwise: the item not chosen (null on a tie)."], ["responses.csv", "tie", "bool", "", "Pairwise: the child said they look the same."], ["responses.csv", "comparison", "string", "", "Pairwise dimension: font, size, colour, lead, track, textlevel."], ["responses.csv", "distractor_id", "string", "", "X1..X6, distractor shown on that screen."], ["responses.csv", "page", "string", "", "Layout screen: busy | calm."], ["responses.csv", "variant", "string", "", "Text screen: dense | plain."], ["responses.csv", "adaptation", "string", "", "Educator backlog item being rated."], ["responses.csv", "felt_load", "int", "0-2", "Three-face rating attached to a reading row."], ["responses.csv", "passage", "string", "", "R1 | R2, which reading passage."], ["responses.csv", "settings", "string", "", "default | own_choices for the two reads."], ["responses.csv", "gaze_usable", "bool", "", "At least 10 gaze samples were collected on that screen."], ["responses.csv", "gaze_samples", "int", "count", "Valid gaze samples on that screen."], ["responses.csv", "duration_ms", "int", "ms", "Gaze sampling duration on that screen."], ["responses.csv", "outside_share", "float", "0-1", "Share of gaze samples outside every zone."], ["responses.csv", "latency_ms", "int", "ms", "Time from screen entry to the moment the answer was logged."], ["responses.csv", "session_elapsed_ms", "int", "ms", "Time since the session start (setup screen left)."], ["responses.csv", "ts", "iso8601", "", "Wall-clock time of the log entry (human reading only; join on t_perf)."], ["responses.csv", "stimulus_hash", "string", "", "Hash of the session's live typography parameters at log time."], ["responses.csv", "t_perf", "float", "ms", "Shared clock time of the log entry. Join key to frames, gaze, events, video."], ["responses.csv", "frame_index", "int", "", "Most recent camera frame index (frames.csv) at log time; empty if no camera."], ["responses.csv", "screen_id", "string", "", "Screen id the response was given on."], ["pairs.csv", "child_id", "string", "", "Child code."], ["pairs.csv", "dimension", "string", "", "font | size | colour | lead | track | textlevel."], ["pairs.csv", "item_a", "string", "", "Item shown on top (position 1)."], ["pairs.csv", "item_b", "string", "", "Item shown at the bottom (position 2)."], ["pairs.csv", "winner", "string", "", "Chosen item, empty on a tie."], ["pairs.csv", "loser", "string", "", "Not-chosen item, empty on a tie."], ["pairs.csv", "tie", "bool", "", "They look the same to me."], ["pairs.csv", "winner_position", "string", "", "top | bottom, for modelling position bias."], ["pairs.csv", "latency_ms", "int", "ms", "Decision latency."], ["pairs.csv", "stimulus_hash_a", "string", "", "Hash of the rendered parameters of item_a."], ["pairs.csv", "stimulus_hash_b", "string", "", "Hash of the rendered parameters of item_b."], ["pairs.csv", "ts", "iso8601", "", "Wall-clock time."], ["pairs.csv", "t_perf", "float", "ms", "Shared clock time of the choice."], ["gaze_zones.csv", "child_id", "string", "", "Child code."], ["gaze_zones.csv", "screen", "string", "", "Logged item the zones belong to."], ["gaze_zones.csv", "block", "string", "", "Block of that screen."], ["gaze_zones.csv", "distractor_id", "string", "", "Distractor on that screen, if any."], ["gaze_zones.csv", "settings", "string", "", "default | own_choices for reading screens."], ["gaze_zones.csv", "passage", "string", "", "Passage id for reading screens."], ["gaze_zones.csv", "zone_id", "string", "", "text | distractor (whole regions only)."], ["gaze_zones.csv", "x", "int", "css px", "Zone left, viewport coordinates."], ["gaze_zones.csv", "y", "int", "css px", "Zone top."], ["gaze_zones.csv", "w", "int", "css px", "Zone width."], ["gaze_zones.csv", "h", "int", "css px", "Zone height."], ["gaze_zones.csv", "samples", "int", "count", "Valid samples inside the zone."], ["gaze_zones.csv", "share", "float", "0-1", "Share of the screen's samples inside the zone."], ["gaze_zones.csv", "dwell_ms", "int", "ms", "share x sampling duration."], ["gaze_zones.csv", "visits", "int", "count", "Separate entries into the zone (coarse excursions, not fixations)."], ["gaze_zones.csv", "first_entry_ms", "int", "ms", "Time from sampling start to the first sample in the zone."], ["gaze_zones.csv", "validation_error_px", "int", "css px", "This participant's measured accuracy."], ["gaze_zones.csv", "validation_error_deg", "float", "deg", "Same, in degrees (see manifest for pitch and distance method)."], ["gaze_zones.csv", "zone_separation_px", "int", "css px", "Smallest centre-to-centre distance between zones on that screen."], ["gaze_zones.csv", "separation_exceeds_error", "bool", "", "Zones further apart than the measured error."], ["gaze_zones.csv", "interpretable", "bool", "", "true only if the between-zone contrast is resolvable; empty = not applicable (single zone)."], ["events.csv", "t_perf", "float", "ms", "Shared clock time of the event (rAF time for onsets and flashes)."], ["events.csv", "type", "string", "", "screen_enter, screen_leave, stimulus_onset, response, sync_flash_on/off, recording_segment_start/stop, break_start/end, visibility, window_blur/focus, resize, scroll, calibration_target_onset/click/offset, validation_target_onset, drift_target_onset, gaze_sampling_start/stop, camera_*, recorder_*, upload_*, admin_command, hover_dwell, preview_shown/preview_hidden/preview_mode (camera picture on the child's screen, v5.1), educator_portal_* (portal connection and every portal action, v5.1), webgazer_mouse_training_off, calibration_target_skipped, and others."], ["events.csv", "screen_id", "string", "", "Screen on display when the event happened."], ["events.csv", "block", "string", "", "Block of that screen."], ["events.csv", "detail", "json", "", "Event-specific fields (e.g. stimulus_dom_hash and mean_rel_luminance on stimulus_onset)."], ["frames.csv", "frame_index", "int", "", "Running index of presented camera frames, from 1."], ["frames.csv", "t_perf", "float", "ms", "Shared clock time when the frame callback ran."], ["frames.csv", "media_time_s", "float", "s", "Frame's media time from requestVideoFrameCallback."], ["frames.csv", "capture_time_perf", "float", "ms", "Camera capture time on the shared clock, where the browser reports it."], ["frames.csv", "expected_display_time_perf", "float", "ms", "When the browser expected to display the frame, shared clock."], ["frames.csv", "presented_frames", "int", "", "Browser's presented-frame counter; gaps mean dropped frames."], ["frames.csv", "dropped_before", "int", "count", "Frames missing between this and the previous callback."], ["frames.csv", "segment", "int", "", "Video part number being recorded at that moment (empty if not recording)."], ["frames.csv", "width", "int", "px", "Frame width."], ["frames.csv", "height", "int", "px", "Frame height."], ["face_quality.csv", "t_perf", "float", "ms", "Shared clock time of the face-model result."], ["face_quality.csv", "frame_index", "int", "", "Latest camera frame index at that time."], ["face_quality.csv", "face_detected", "bool", "", "The face mesh found a face."], ["face_quality.csv", "box_x", "int", "model px", "Face box left, in the tracker image (img_w x img_h)."], ["face_quality.csv", "box_y", "int", "model px", "Face box top."], ["face_quality.csv", "box_w", "int", "model px", "Face box width."], ["face_quality.csv", "box_h", "int", "model px", "Face box height."], ["face_quality.csv", "img_w", "int", "px", "Width of the image the model ran on (may be smaller than the recorded video)."], ["face_quality.csv", "img_h", "int", "px", "Height of that image."], ["face_quality.csv", "landmark_confidence", "float", "", "Not reported by this face-mesh runtime; always empty, kept for schema stability."], ["face_quality.csv", "yaw_deg", "float", "deg", "Approximate head yaw from landmark depth (flagging only)."], ["face_quality.csv", "pitch_deg", "float", "deg", "Approximate head pitch."], ["face_quality.csv", "roll_deg", "float", "deg", "Head roll from the eye-corner line."], ["face_quality.csv", "ear_left", "float", "ratio", "Eye aspect ratio, left eye (vertical / horizontal opening)."], ["face_quality.csv", "ear_right", "float", "ratio", "Eye aspect ratio, right eye."], ["face_quality.csv", "eyes_closed", "bool", "", "Both EARs below the protocol threshold (manifest.protocol.ear_closed)."], ["face_quality.csv", "interocular_px", "float", "model px", "Distance between eye centres; a per-frame distance proxy."], ["face_quality.csv", "distance_ratio", "float", "ratio", "Interocular px at calibration / now. >1 means further from the screen than at calibration."], ["face_quality.csv", "face_brightness", "int", "0-255", "Mean luma inside the face box (every third row)."], ["face_quality.csv", "bg_brightness", "int", "0-255", "Mean luma outside the face box; much brighter than the face = backlit."], ["face_quality.csv", "screen_id", "string", "", "Screen on display."], ["gaze.csv", "t_perf", "float", "ms", "Shared clock time of the gaze callback."], ["gaze.csv", "x", "int", "css px", "Estimated gaze x, viewport coordinates. Empty when invalid."], ["gaze.csv", "y", "int", "css px", "Estimated gaze y."], ["gaze.csv", "valid", "bool", "", "false = the tracker produced no estimate for that callback (counts toward data loss)."], ["gaze.csv", "screen_id", "string", "", "Screen on display."], ["gaze.csv", "phase", "string", "", "calibration | validation | drift | the screen id of a measured screen."], ["gaze.csv", "calibration_attempt", "int", "", "Calibration attempt in effect."], ["gaze.csv", "validation_error_deg", "float", "deg", "Accuracy of the validation in effect at that time."], ["gaze.csv", "validation_meets_protocol", "bool", "", "That validation met the pre-declared thresholds."], ["calibration.csv", "attempt", "int", "", "Calibration attempt (1 = first; at most 1 + max_recalibrations)."], ["calibration.csv", "kind", "string", "", "calibration | calibration_retry | validation | drift. calibration_retry (v5.1): a dot where fewer than 4 clean training samples were obtained; the child was asked to look again and a later row for the same point_index is the counted one."], ["calibration.csv", "point_index", "int", "", "Index into the 3x3 grid (calibration) or the 5 validation points."], ["calibration.csv", "order", "int", "", "Position in the randomised presentation order."], ["calibration.csv", "target_x", "int", "css px", "Target centre, viewport coordinates."], ["calibration.csv", "target_y", "int", "css px", "Target centre."], ["calibration.csv", "onset_t_perf", "float", "ms", "Target first painted (rAF)."], ["calibration.csv", "click_t_perf", "float", "ms", "Educator pressed 'looking now' (or, in automatic mode, the dot recorded itself; samples_json.source says which)."], ["calibration.csv", "offset_t_perf", "float", "ms", "Target removed / measurement ended."], ["calibration.csv", "n_samples", "int", "count", "Valid gaze predictions during the dwell."], ["calibration.csv", "median_x", "int", "css px", "Median predicted x during the dwell."], ["calibration.csv", "median_y", "int", "css px", "Median predicted y."], ["calibration.csv", "error_px", "int", "css px", "Distance between median prediction and target."], ["calibration.csv", "error_deg", "float", "deg", "Same in degrees (validation and drift only)."], ["calibration.csv", "samples_json", "json", "", "Raw predictions [x, y, t_perf] during the dwell; for calibration rows also the t_perf of each training sample, trained (clean samples used), gated (false if the face model was unavailable and samples were not filtered), rejected_ticks (why samples were refused: no_face, eyes_closed, head_turned, no_recent_frame), source and keep_model. Validation and drift samples exclude the first 350 ms after the button. With the video, this is ground truth for offline re-calibration."], ["aoi.csv", "t_perf", "float", "ms", "When the boxes were measured."], ["aoi.csv", "screen_id", "string", "", "Screen."], ["aoi.csv", "reason", "string", "", "onset | resize | scroll."], ["aoi.csv", "aoi_id", "string", "", "Region name (card, main_text, ad, sidebar, popup, chat, bottom_bar, nav, opt_pair, ...); _n suffix for repeats."], ["aoi.csv", "selector", "string", "", "CSS selector the region was measured from."], ["aoi.csv", "x", "int", "css px", "Left, viewport coordinates (same frame as gaze)."], ["aoi.csv", "y", "int", "css px", "Top."], ["aoi.csv", "w", "int", "css px", "Width."], ["aoi.csv", "h", "int", "css px", "Height."], ["aoi.csv", "scroll_x", "int", "css px", "Stage scroll offset at measurement."], ["aoi.csv", "scroll_y", "int", "css px", "Panel scroll offset at measurement."], ["aoi.csv", "viewport_w", "int", "css px", "Viewport width."], ["aoi.csv", "viewport_h", "int", "css px", "Viewport height."], ["pointer.csv", "t_perf", "float", "ms", "Event time."], ["pointer.csv", "type", "string", "", "move (throttled to 20 Hz) | down | up."], ["pointer.csv", "x", "int", "css px", "Pointer x."], ["pointer.csv", "y", "int", "css px", "Pointer y."], ["pointer.csv", "buttons", "int", "", "Pressed-buttons bitmask."], ["pointer.csv", "pointer_type", "string", "", "mouse | touch | pen."], ["pointer.csv", "target", "string", "", "Coarse element under the pointer."], ["pointer.csv", "screen_id", "string", "", "Screen."], ["video_segments.csv", "segment", "int", "", "Part number; file video/part_NNN.webm."], ["video_segments.csv", "file", "string", "", "Path of the part inside the session folder."], ["video_segments.csv", "mime", "string", "", "Container and codec actually used."], ["video_segments.csv", "reason_start", "string", "", "consent | block_change:<block> | max_length | restart_after_error | resume_after_reload."], ["video_segments.csv", "reason_stop", "string", "", "Why the part ended (session_end, withdrawn, camera_lost, crash_salvaged, ...)."], ["video_segments.csv", "start_t_perf", "float", "ms", "Recorder start event; the part's media time 0 is at or just after this."], ["video_segments.csv", "first_chunk_t_perf", "float", "ms", "First 5-second chunk delivered."], ["video_segments.csv", "stop_t_perf", "float", "ms", "Recorder stop."], ["video_segments.csv", "first_frame_index", "int", "", "First frames.csv row recorded in this part."], ["video_segments.csv", "last_frame_index", "int", "", "Last frames.csv row recorded in this part."], ["video_segments.csv", "chunks", "int", "count", "Chunks written."], ["video_segments.csv", "bytes", "int", "bytes", "Part size."], ["video_segments.csv", "screen_at_start", "string", "", "Screen on display when the part began."], ["video_segments.csv", "block", "string", "", "Block when the part began."], ["data_dictionary.csv", "file", "string", "", "File the column belongs to."], ["data_dictionary.csv", "column", "string", "", "Column name."], ["data_dictionary.csv", "type", "string", "", "string | int | float | bool | json | iso8601 | any."], ["data_dictionary.csv", "unit", "string", "", "Unit where one applies."], ["data_dictionary.csv", "description", "string", "", "Meaning."]], "files": [["manifest.json", "Read first. File list with SHA-256 and row counts, versions, consent form version, retention date, clock, protocol thresholds, camera and codec."], ["session.json", "Complete record: every response, derived summaries (profile inputs, CLS weights, quality), environment, consent, physical calibration, video and face summaries."], ["session.partial.json", "Snapshot written every 5 minutes during the session; superseded by session.json."], ["profile.json", "The settings object the extension loads (child or educator half)."], ["stimuli.json", "Exact DOM of every distinct stimulus shown, keyed by stimulus_dom_hash (see events.csv stimulus_onset)."], ["video/part_NNN.webm", "Face video, no audio, one self-contained file per part (block boundaries or 2 minutes)."]]};
 
 /* =========================================================================
    v5 · SESSION LIFECYCLE, EXPORT, MANIFEST
@@ -20034,7 +20701,14 @@ function v5Quality() {
   if (overrides.length) flags.push("Framing check overridden " + overrides.length + "×: " + overrides.map(f => f.override || "no reason").join("; "));
   if (STREAMS.writeFailed()) flags.push("Some rows could not be written to this laptop's storage");
   if (S.calibration_attempts > 1) flags.push("Calibration attempts: " + S.calibration_attempts);
+  // v5.1: the child could see their own face on these screens for this long.
+  const pv = (S.preview && S.preview.shown_ms_by_screen) || {};
+  const pvTotal = Object.values(pv).reduce((a, b) => a + b, 0);
+  if (pvTotal > 0) flags.push("Camera preview shown on the child's screen for " + Math.round(pvTotal / 1000) + " s (see preview_shown events)");
+  let remote = null; try { remote = REMOTE.summary(); } catch (e) {}
   return {
+    preview: { mode_changes: (S.preview && S.preview.mode_changes) || [], shown_ms_by_screen: pv, shown_ms_total: Math.round(pvTotal) },
+    educator_portal: Object.assign({ connections: (S.remote && S.remote.connections) || [] }, remote || {}),
     protocol: PROTOCOL, frames: fr, face: fq, per_block_video: perBlock,
     video: { consented: S.video.consented, deleted: S.video.deleted, segments: REC.segments.length, recorder_failures: REC.failures(), camera_lost: CAM.lost(), codec: REC.mime() },
     drift: { checks: S.drift || [], max_deg: drifts.length ? Math.max(...drifts) : null, over_limit: drifts.filter(x => x > PROTOCOL.drift_max_deg).length },

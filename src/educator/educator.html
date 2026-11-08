@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glide Educator Portal</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%231F6B4A'/%3E%3Ctext x='16' y='23' font-family='Helvetica,Arial' font-size='20' font-weight='700' fill='%23fff' text-anchor='middle'%3EE%3C/text%3E%3C/svg%3E">
+<!--
+  GLIDE · EDUCATOR PORTAL (built by tools/build.py from src/educator/educator.html)
+
+  Opened on the special educator's own device (phone, tablet or laptop),
+  beside the participant laptop. It shows:
+    - the live camera picture of the child, with the framing oval, the face
+      box and the eyes drawn on it, and what to adjust in words
+    - during calibration: where the dot is and where the camera thinks the
+      child is looking, and whether the eyes are clear enough to record
+    - every question and button the educator needs (which one the child
+      chose, Next, Back, Stop), so the laptop can show the child nothing else
+
+  Nothing is stored on this device. The picture and the controls go directly
+  between this device and the laptop (WebRTC); the study backend only passes
+  the connection offer and answer. Every answer is logged on the laptop, on
+  the laptop's clock, exactly as if it had been pressed there.
+-->
+<style>
+/*__INSTRUMENT_CSS__*/
+</style>
+<style>
+/* ----- portal layout (after the instrument's own styles, so these win) ----- */
+html,body{height:auto;min-height:100%}
+body{background:var(--bg)}
+#top{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:10px 16px;background:#1F6B4A;color:#fff;font-family:var(--mono);font-size:12px;position:sticky;top:0;z-index:20}
+#top b{font-family:var(--ui);font-size:14px;letter-spacing:.01em}
+#top .pill{padding:2px 9px;border-radius:10px;background:rgba(255,255,255,.18)}
+#top .pill.bad{background:#8A3324}#top .pill.warn{background:#A8630F}#top .pill.good{background:rgba(255,255,255,.28)}
+#top .sp{margin-left:auto;opacity:.85}
+#grid{display:grid;grid-template-columns:minmax(300px,42%) 1fr;gap:0;min-height:calc(100vh - 42px)}
+#cam{padding:14px 16px;border-right:1px solid var(--rule);background:#F6F8F9;display:flex;flex-direction:column;gap:10px}
+#right{display:flex;flex-direction:column;min-width:0;background:var(--bg)}
+#panel{flex:1;overflow:visible;padding:20px 22px}
+#foot{position:sticky;bottom:0;background:var(--surface);z-index:5}
+.vbox{position:relative;width:100%;aspect-ratio:4/3;background:#111;border-radius:6px;overflow:hidden}
+.vbox video,.vbox canvas{position:absolute;inset:0;width:100%;height:100%}
+.vbox video{object-fit:cover;transform:scaleX(-1)}
+.vbox .msg{position:absolute;inset:0;display:grid;place-items:center;color:#C9D1D8;font-size:13px;text-align:center;padding:18px}
+#advice{font-size:15px;font-weight:600;padding:9px 12px;border-radius:5px;background:#FBF0EE;color:#8A3324}
+#advice.good{background:#EEF6F1;color:#1F6B4A}
+#map{position:relative;width:100%;aspect-ratio:16/10;background:#fff;border:1px solid var(--rule);border-radius:4px}
+#map i{position:absolute;width:14px;height:14px;margin:-7px 0 0 -7px;border-radius:50%;display:none}
+#map #mt{background:var(--accent);box-shadow:0 0 0 3px #fff,0 0 0 4px var(--accent)}
+#map #mg{background:rgba(168,99,15,.75);width:18px;height:18px;margin:-9px 0 0 -9px}
+#mapwrap .hint{margin-top:4px}
+.seg{display:flex;gap:0;border:1px solid var(--rule);border-radius:4px;overflow:hidden;background:var(--surface)}
+.seg button{flex:1;border:0;border-right:1px solid var(--rule);background:transparent;padding:8px 6px;font-size:13px;color:var(--ink)}
+.seg button:last-child{border-right:0}
+.seg button.on{background:var(--accent);color:#fff}
+.ctl{display:flex;flex-direction:column;gap:6px}
+.ctl label{font-size:12px;color:var(--muted);font-family:var(--mono);letter-spacing:.04em;text-transform:uppercase}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+.row .speak{margin:0}
+#setup{max-width:520px;margin:40px auto;padding:0 16px}
+#setup .card{padding:24px}
+#toast{position:fixed;left:50%;bottom:80px;transform:translateX(-50%);background:#12171C;color:#fff;padding:9px 14px;border-radius:6px;font-size:13px;z-index:60;display:none;max-width:90vw}
+#toast.on{display:block}
+.live-usable{font-size:13px;padding:6px 10px;border-radius:4px;background:#F2F5F7}
+.live-usable.ok{background:#EEF6F1;color:#1F6B4A}.live-usable.bad{background:#FBF0EE;color:#8A3324}
+@media (max-width:900px){
+  #grid{grid-template-columns:1fr}
+  #cam{border-right:0;border-bottom:1px solid var(--rule);position:sticky;top:42px;z-index:10;padding:10px 12px}
+  #cam.compact .vbox{max-height:30vh;aspect-ratio:auto;height:30vh}
+  #cam.compact #mapwrap,#cam.compact .ctl,#cam.compact #checks{display:none}
+  #panel{padding:16px 14px}
+  #foot{padding:10px 14px}
+}
+</style>
+</head>
+<body>
+<div id="top"><b>Glide · Educator portal</b><span id="sess" class="pill">no session</span><span id="conn" class="pill bad">not connected</span><span id="rec" class="pill hide">● recording</span><span class="sp" id="scr"></span></div>
+
+<div id="setup" class="hide">
+  <div class="card">
+    <div class="eyebrow">Educator portal · __INSTRUMENT_VERSION__</div>
+    <h1>Connect to the participant laptop</h1>
+    <p class="lede">Type the join code shown on the admin console (the same code the laptop uses). This device then shows the child's camera and all the questions; the laptop shows the child only the things to compare.</p>
+    <label class="fld"><span>Join code</span><input id="code" type="text" class="codein" maxlength="6" placeholder="CODE" autocomplete="off"></label>
+    <details id="adv"><summary>Backend settings</summary>
+      <label class="fld"><span>Backend URL</span><input id="api" type="text" placeholder="https://script.google.com/macros/s/…/exec"></label>
+      <label class="fld"><span>Device key</span><input id="key" type="text" placeholder="device key (from the admin console's setup link)"></label>
+    </details>
+    <button class="btn" id="go" style="width:100%;margin-top:10px">Connect</button>
+    <div id="err" class="notice bad hide"></div>
+    <p class="hint">Nothing is saved on this device. The video is a live view only and is never recorded here.</p>
+  </div>
+</div>
+
+<main id="grid" class="hide">
+  <section id="cam" aria-label="Live camera">
+    <div class="vbox" id="vbox"><video id="rv" autoplay playsinline muted></video><canvas id="ov"></canvas><div class="msg" id="novid">Waiting for the laptop…</div></div>
+    <div id="advice">Waiting for the camera</div>
+    <div class="live-usable hide" id="usable"></div>
+    <div id="checks" class="checks"></div>
+    <div id="mapwrap" class="hide"><div class="eyebrow">Laptop screen · dot and where the camera thinks the eyes look</div><div id="map"><i id="mt"></i><i id="mg"></i></div><div class="hint" id="mapnote"></div></div>
+    <div class="ctl">
+      <label>Camera picture on the laptop screen</label>
+      <div class="seg" id="pvseg"><button data-m="off">Off</button><button data-m="auto">Only when out of frame</button><button data-m="on">Always</button></div>
+      <div class="row" style="margin-top:6px">
+        <button class="speak" id="vidbtn">Hide video here</button>
+        <button class="speak" id="localbtn">Also show controls on the laptop</button>
+        <button class="speak" id="compactbtn">Smaller video</button>
+      </div>
+    </div>
+  </section>
+  <section id="right" aria-label="Questions and controls">
+    <div id="panel"><div class="notice">Connecting to the participant laptop…</div></div>
+    <div id="foot">
+      <button class="btn ghost" id="back">Back</button>
+      <div class="prog"><span id="ptxt"></span><div class="bar"><div id="pbar" style="width:0%"></div></div></div>
+      <button class="btn" id="next">Next</button>
+      <button class="btn stop hide" id="stop">Stop now</button>
+    </div>
+  </section>
+</main>
+<div class="imodal" id="imodal" role="dialog" aria-modal="true"><div id="imodal-body"></div></div>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script>
+/*__SHARED_JS__*/
+</script>
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const ICE = [{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:stun1.l.google.com:19302" }];
+const CHECK_NAMES = { face:"Face found", centred:"Face centred", distance:"Distance from screen", eyes:"Both eyes visible", lighting:"Lighting", level:"Head level" };
+
+/* ------------------------------------------------------------- config */
+const CKEY = "glide_edu";
+let cfg = {};
+try { cfg = JSON.parse(localStorage.getItem(CKEY) || "{}"); } catch (e) {}
+try {
+  const q = new URLSearchParams(location.search);
+  if (q.get("api")) cfg.api = q.get("api");
+  if (q.get("k")) cfg.key = q.get("k");
+  if (q.get("code")) cfg.code = q.get("code").toUpperCase();
+  if (q.get("api") || q.get("k") || q.get("code")) { localStorage.setItem(CKEY, JSON.stringify(cfg)); history.replaceState(null, "", location.pathname); }
+} catch (e) {}
+function save() { try { localStorage.setItem(CKEY, JSON.stringify(cfg)); } catch (e) {} }
+
+async function call(op, body, ms) {
+  const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), ms || 20000);
+  try {
+    const r = await fetch(cfg.api, { method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(Object.assign({ op, key: cfg.key }, body || {})), signal: ctl.signal });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || "server_error");
+    return j;
+  } finally { clearTimeout(to); }
+}
+
+/* ------------------------------------------------------------- state */
+let sess = null, pc = null, dc = null, helloId = null, helloAt = 0, pollT = null, wd = null, connected = false, lastFace = null, wake = null;
+let videoOn = true, localOn = false;
+
+function setConn(text, cls) { const c = $("#conn"); c.textContent = text; c.className = "pill " + (cls || ""); }
+function toast(t) { const n = $("#toast"); n.textContent = t; n.classList.add("on"); clearTimeout(toast.t); toast.t = setTimeout(() => n.classList.remove("on"), 3500); }
+function sendM(o) { if (dc && dc.readyState === "open") { dc.send(JSON.stringify(o)); return true; } toast("Not connected to the laptop yet"); return false; }
+
+/* ------------------------------------------------------------- setup */
+function showSetup(err) {
+  $("#setup").classList.remove("hide"); $("#grid").classList.add("hide");
+  $("#code").value = cfg.code || ""; $("#api").value = cfg.api || ""; $("#key").value = cfg.key ? "••••••••" : "";
+  if (!cfg.api || !cfg.key) $("#adv").open = true;
+  const e = $("#err"); e.classList.toggle("hide", !err); e.textContent = err || "";
+}
+$("#code").addEventListener("input", e => { e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""); });
+$("#go").addEventListener("click", () => {
+  cfg.code = $("#code").value.trim();
+  if ($("#api").value.trim()) cfg.api = $("#api").value.trim();
+  if ($("#key").value.trim() && !/^•+$/.test($("#key").value.trim())) cfg.key = $("#key").value.trim();
+  save(); start();
+});
+
+async function start() {
+  if (!cfg.api || !cfg.key || !cfg.code) return showSetup(!cfg.code ? null : "Backend URL and device key are needed (open the portal link from the admin console once on this device).");
+  setConn("looking up the session…", "warn");
+  try {
+    const j = await call("edu_join", { join_code: cfg.code });
+    sess = j.session;
+  } catch (e) { return showSetup("Could not find that session: " + (e.message || e) + ". Check the join code on the admin console."); }
+  $("#setup").classList.add("hide"); $("#grid").classList.remove("hide");
+  $("#sess").textContent = (sess.mode || "") + " · child " + (sess.child_id || "-") + " · " + sess.join_code;
+  hello();
+}
+
+/* ---------------------------------------------------------- signalling
+   1 this device posts a "hello"   2 the laptop answers with an offer
+   3 this device posts the answer  4 direct connection, video + controls */
+async function hello() {
+  clearTimeout(pollT); clearTimeout(wd);
+  closePc();
+  helloId = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+  helloAt = Date.now();
+  setConn("waiting for the laptop…", "warn");
+  $("#novid").textContent = "Waiting for the participant laptop. It connects by itself once it has joined this session (this can take up to 15 seconds).";
+  try { await call("signal", { session_id: sess.session_id, role: "educator", put: { type: "hello", id: helloId } }); }
+  catch (e) { setConn("backend unreachable, retrying", "bad"); pollT = setTimeout(hello, 5000); return; }
+  pollOffer();
+}
+async function pollOffer() {
+  clearTimeout(pollT);
+  try {
+    const j = await call("signal", { session_id: sess.session_id, get: "laptop" }, 12000);
+    if (j.msg && j.msg.type === "offer" && j.msg.id === helloId) { await answer(j.msg.sdp); return; }
+  } catch (e) {}
+  if (Date.now() - helloAt > 40000) { hello(); return; }    // say hello again: the laptop may only just have joined
+  pollT = setTimeout(pollOffer, 1500);
+}
+function closePc() {
+  connected = false;
+  try { if (dc) dc.close(); } catch (e) {}
+  try { if (pc) pc.close(); } catch (e) {}
+  pc = null; dc = null;
+}
+async function answer(sdp) {
+  setConn("connecting…", "warn");
+  pc = new RTCPeerConnection({ iceServers: ICE });
+  pc.addEventListener("track", e => {
+    const v = $("#rv"); v.srcObject = e.streams && e.streams[0] ? e.streams[0] : new MediaStream([e.track]);
+    v.play().catch(() => {});
+  });
+  pc.addEventListener("datachannel", e => { dc = e.channel; wire(dc); });
+  pc.addEventListener("connectionstatechange", () => {
+    const st = pc && pc.connectionState;
+    if (st === "failed" || st === "closed") { setConn("connection lost, reconnecting", "bad"); setTimeout(hello, 1000); }
+  });
+  await pc.setRemoteDescription({ type: "offer", sdp });
+  const a = await pc.createAnswer(); await pc.setLocalDescription(a);
+  await new Promise(res => {
+    if (pc.iceGatheringState === "complete") return res();
+    pc.addEventListener("icegatheringstatechange", () => { if (pc && pc.iceGatheringState === "complete") res(); });
+    setTimeout(res, 3000);
+  });
+  await call("signal", { session_id: sess.session_id, role: "educator", put: { type: "answer", id: helloId, sdp: pc.localDescription.sdp } });
+  wd = setTimeout(() => { if (!connected) { setConn("could not connect directly, retrying", "bad"); hello(); } }, 30000);
+}
+function wire(ch) {
+  ch.addEventListener("open", () => {
+    connected = true; clearTimeout(wd);
+    setConn("connected", "good");
+    sendM({ t: "resync" });
+    if (!videoOn) sendM({ t: "video", on: false });
+    try { if (navigator.wakeLock) navigator.wakeLock.request("screen").then(l => wake = l, () => {}); } catch (e) {}
+  });
+  ch.addEventListener("close", () => {
+    if (!connected) return;
+    connected = false; setConn("connection lost, reconnecting", "bad");
+    setTimeout(hello, 1000);
+  });
+  ch.addEventListener("message", e => { let m; try { m = JSON.parse(e.data); } catch (x) { return; } onMsg(m); });
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && connected && navigator.wakeLock) navigator.wakeLock.request("screen").then(l => wake = l, () => {});
+});
+
+/* -------------------------------------------------------------- mirror */
+function syncValue(x, y) {
+  const focused = document.activeElement === x;
+  if (x.tagName === "INPUT") {
+    if (x.type === "checkbox" || x.type === "radio") x.checked = y.hasAttribute("checked");
+    else if (!focused) { const v = y.getAttribute("value") || ""; if (x.value !== v) x.value = v; }
+  } else if (x.tagName === "TEXTAREA") { if (!focused && x.value !== y.textContent) x.value = y.textContent; }
+  else if (x.tagName === "SELECT") { const o = y.querySelector("option[selected]"); if (o && !focused) x.value = o.getAttribute("value") !== null ? o.getAttribute("value") : o.textContent; }
+}
+function syncAttrs(x, y) {
+  for (const a of Array.from(x.attributes)) if (!y.hasAttribute(a.name)) x.removeAttribute(a.name);
+  for (const a of Array.from(y.attributes)) if (x.getAttribute(a.name) !== a.value) x.setAttribute(a.name, a.value);
+}
+/* Patch the panel in place rather than replacing it, so a field being typed
+   in or a slider being dragged keeps its focus while the laptop re-renders. */
+function morph(from, to) {
+  const a = Array.from(from.childNodes), b = Array.from(to.childNodes);
+  for (let i = 0; i < b.length; i++) {
+    const x = a[i], y = b[i];
+    if (!x) { from.appendChild(y.cloneNode(true)); continue; }
+    if (x.nodeType !== y.nodeType || x.nodeName !== y.nodeName) { from.replaceChild(y.cloneNode(true), x); continue; }
+    if (x.nodeType !== 1) { if (x.nodeValue !== y.nodeValue) x.nodeValue = y.nodeValue; continue; }
+    syncAttrs(x, y);
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(x.tagName)) syncValue(x, y);
+    if (x.tagName !== "TEXTAREA") morph(x, y);
+  }
+  for (let i = a.length - 1; i >= b.length; i--) from.removeChild(a[i]);
+}
+const sig = n => n.tagName + "|" + (n.textContent || "").replace(/\s+/g, " ").trim().slice(0, 24);
+let lastScreen = null;
+function onPanel(m) {
+  const t = document.createElement("div"); t.innerHTML = m.html;
+  morph($("#panel"), t);
+  const f = m.foot || {};
+  $("#back").disabled = !!(f.back && f.back.disabled);
+  $("#next").disabled = !!(f.next && f.next.disabled);
+  $("#next").classList.toggle("hide", !!(f.next && f.next.hidden));
+  $("#stop").classList.toggle("hide", !!(f.stop && f.stop.hidden));
+  $("#ptxt").textContent = f.ptxt || ""; $("#pbar").style.width = f.pct || "0%";
+  const s = m.screen || {};
+  $("#scr").textContent = (s.id || "") + (s.bar ? " · " + s.bar.replace(/\s+/g, " ").trim().slice(0, 80) : "");
+  document.body.classList.toggle("child", s.mode === "child");
+  if (s.id !== lastScreen) { lastScreen = s.id; window.scrollTo(0, 0); $("#panel").scrollTop = 0; }
+  $("#rec").classList.toggle("hide", !s.recording);
+}
+
+/* Clicks: sent to the same element on the laptop. Text fields and sliders
+   are typed here and sent value by value. */
+const TYPED = n => (n.tagName === "INPUT" && !/^(checkbox|radio|button|submit)$/.test(n.type)) || n.tagName === "TEXTAREA" || n.tagName === "SELECT";
+$("#panel").addEventListener("click", e => {
+  const n = e.target.closest("[data-rid]"); if (!n) return;
+  if (TYPED(n)) return;
+  e.preventDefault();
+  sendM({ t: "click", rid: +n.getAttribute("data-rid"), sig: sig(n) });
+});
+const sendInput = e => {
+  const n = e.target; if (!n.hasAttribute || !n.hasAttribute("data-rid") || !TYPED(n)) return;
+  sendM({ t: "input", rid: +n.getAttribute("data-rid"), sig: sig(n), value: n.value });
+};
+$("#panel").addEventListener("input", sendInput);
+$("#panel").addEventListener("change", e => { if (e.target.tagName === "SELECT") sendInput(e); });
+$("#panel").addEventListener("toggle", e => {}, true);
+document.addEventListener("keydown", e => {
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName || "")) return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if ($("#imodal").classList.contains("on")) { if (e.key === "Escape") $("#imodal").classList.remove("on"); return; }
+  if (/^[1-9 ]$/.test(e.key) || e.key === "ArrowRight" || e.key === "ArrowLeft" || e.key === "Enter") {
+    if (!connected) return;
+    e.preventDefault(); sendM({ t: "key", key: e.key });
+  }
+});
+$("#next").addEventListener("click", () => sendM({ t: "nav", d: 1 }));
+$("#back").addEventListener("click", () => sendM({ t: "nav", d: -1 }));
+$("#stop").addEventListener("click", () => {
+  const why = prompt("Ending the session early is completely fine.\n\nBriefly, why? (tired / distressed / distracted / out of time / other)\n\nIf the student or guardian is WITHDRAWING from the study, type the word: withdraw");
+  if (why === null) return;
+  if (/^\s*withdraw\s*$/i.test(why)) {
+    const r = prompt("Marking this session as withdrawn. It will still be saved, with the withdrawal recorded inside.\n\nReason (optional):");
+    const del = confirm("Recording stops now.\n\nShould the VIDEO also be deleted?\n\nOK  =  keep the answers, DELETE the video (laptop and Drive)\nCancel  =  keep both, marked as withdrawn");
+    sendM({ t: "stop", withdraw: true, reason: r || "not given", delete_video: del });
+  } else sendM({ t: "stop", withdraw: false, reason: why || "not given" });
+});
+
+/* ------------------------------------------------------- face + map */
+function onFace(m) {
+  lastFace = m;
+  const v = $("#rv"), hasVid = !!(videoOn && m.camera && v.srcObject && v.videoWidth > 0);
+  $("#novid").classList.toggle("hide", hasVid);
+  v.style.visibility = hasVid ? "visible" : "hidden";      // never a frozen last frame once the camera is off
+  if (!hasVid) $("#novid").textContent = !videoOn ? "Video hidden on this device." : !m.camera ? "The laptop camera is off (no camera consent yet, or not needed in this session)." : "Starting the video…";
+  if (m.f && m.f.img_w) $("#vbox").style.aspectRatio = m.f.img_w + "/" + m.f.img_h;
+  drawFaceOverlay($("#ov"), m.f, { pass: m.pass, pts: m.pts, age_ms: m.age_ms, label: true });
+  const adv = $("#advice");
+  const txt = !m.camera ? "Camera off" : m.pass ? "In frame: good" : faceAdvice(m.age_ms !== null && m.age_ms < 1500 ? m.f : null, m.checks);
+  adv.textContent = txt; adv.classList.toggle("good", !!m.pass || txt === "Good");
+  const g = $("#checks"); g.innerHTML = "";
+  if (m.checks) Object.keys(CHECK_NAMES).forEach(k => { const x = m.checks[k] || { g: "n", why: "" };
+    const d = document.createElement("span"); d.className = "chk " + x.g; g.appendChild(d);
+    const s = document.createElement("span"); s.textContent = CHECK_NAMES[k] + " · " + (x.why || ""); g.appendChild(s); });
+  // dot map, only while a dot is on the laptop screen
+  const mw = $("#mapwrap"), mt = $("#mt"), mg = $("#mg");
+  mw.classList.toggle("hide", !m.target);
+  const u = $("#usable");
+  if (m.target) {
+    $("#map").style.aspectRatio = m.vw + "/" + m.vh;
+    mt.style.display = "block"; mt.style.left = (m.target.x / m.vw * 100) + "%"; mt.style.top = (m.target.y / m.vh * 100) + "%";
+    if (m.gaze) { mg.style.display = "block"; mg.style.left = Math.max(0, Math.min(100, m.gaze.x / m.vw * 100)) + "%"; mg.style.top = Math.max(0, Math.min(100, m.gaze.y / m.vh * 100)) + "%"; }
+    else mg.style.display = "none";
+    $("#mapnote").textContent = "Blue: the dot. Orange: the camera's current guess" + (m.target.kind === "calibration" ? " (still learning, so it will be off at first)." : ". The closer the two, the better.");
+    u.classList.remove("hide");
+    const ok = m.usable && m.usable.ok;
+    u.className = "live-usable " + (ok ? "ok" : "bad");
+    u.textContent = m.target.busy ? (ok ? "Recording… keep the child looking at the dot" : "Recording, but the eyes are not clear right now") :
+      ok ? "Eyes are clear: press “They are looking at the dot” when the child is looking at it" : "Not ready: " + ({ no_face: "no face in view", eyes_closed: "eyes closed or blinking", head_turned: "head turned away", no_recent_frame: "camera not updating" }[m.usable && m.usable.why] || "checking");
+  } else u.classList.add("hide");
+  document.querySelectorAll("#pvseg button").forEach(b => b.classList.toggle("on", b.dataset.m === m.preview));
+  $("#rec").classList.toggle("hide", !m.recording);
+}
+function onMsg(m) {
+  if (m.t === "panel") onPanel(m);
+  else if (m.t === "face") onFace(m);
+  else if (m.t === "toast") toast(m.text);
+  else if (m.t === "modal") {
+    const b = $("#imodal-body"); b.innerHTML = m.html;
+    const c = document.createElement("button"); c.className = "close"; c.textContent = "Close"; c.onclick = () => $("#imodal").classList.remove("on");
+    b.appendChild(c); $("#imodal").classList.add("on");
+  }
+}
+
+/* ----------------------------------------------------------- controls */
+document.querySelectorAll("#pvseg button").forEach(b => b.addEventListener("click", () => sendM({ t: "preview", mode: b.dataset.m })));
+$("#vidbtn").addEventListener("click", () => {
+  videoOn = !videoOn; $("#vidbtn").textContent = videoOn ? "Hide video here" : "Show video here";
+  $("#rv").classList.toggle("hide", !videoOn); sendM({ t: "video", on: videoOn });
+});
+$("#localbtn").addEventListener("click", () => {
+  localOn = !localOn; $("#localbtn").textContent = localOn ? "Controls on the portal only" : "Also show controls on the laptop";
+  sendM({ t: "local", on: localOn });
+});
+$("#compactbtn").addEventListener("click", () => { const c = $("#cam").classList.toggle("compact"); $("#compactbtn").textContent = c ? "Bigger video" : "Smaller video"; });
+if (matchMedia("(max-width:900px)").matches) { $("#cam").classList.add("compact"); $("#compactbtn").textContent = "Bigger video"; }
+setInterval(() => { if (lastFace) drawFaceOverlay($("#ov"), lastFace.f, { pass: lastFace.pass, pts: lastFace.pts, age_ms: (lastFace.age_ms || 0), label: true }); }, 1000);
+
+start();
+</script>
+</body>
+</html>

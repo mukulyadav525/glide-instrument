@@ -5,8 +5,8 @@ Done **once**, by the researcher, signed in to the Google account that should **
 ## 1. Create the script
 
 1. Go to <https://script.google.com> and click **New project**. Name it `GLIDE backend`.
-2. Delete the sample code. Paste the whole of [`Code.gs`](Code.gs).
-3. Click the gear icon (**Project Settings**) and tick **Show "appsscript.json" manifest file in editor**. Open `appsscript.json` and replace its contents with [`appsscript.json`](appsscript.json). Change `timeZone` if you are not in India.
+2. Delete the sample code. Paste the whole of [`Code.gs`](../backend/apps_script/Code.gs).
+3. Click the gear icon (**Project Settings**) and tick **Show "appsscript.json" manifest file in editor**. Open `appsscript.json` and replace its contents with [`appsscript.json`](../backend/apps_script/appsscript.json). Change `timeZone` if you are not in India.
 4. Left sidebar: **Services** (+), add **Drive API** (v3). Without it, "delete video" sends files to the Drive trash (emptied after 30 days) instead of deleting them at once.
 5. Click **Save**.
 
@@ -41,12 +41,14 @@ GLIDE_Study_Data/
 
 When you change `Code.gs` later: **Deploy**, then **Manage deployments**, then edit (pencil), then **Version: New version**. The URL stays the same.
 
+> **Updating from v5.0 to v5.1:** paste the new `Code.gs` over the old one, **Save**, then deploy a **new version** as above. Do **not** run `setup()` again: the keys and folders stay as they are. v5.1 adds two operations, `edu_join` and `signal`, used by the educator portal. Until the script is updated, the portal shows *unknown_op* and the laptop works with its own panel. Check with the admin console: its header should say `glide-backend-5.1.0`.
+
 ## 4. Connect the admin console
 
 Open `admin.html`. You can use the copy on the hosted instrument site, or open it straight from disk. It works on a phone or tablet too.
 
 1. Paste the `/exec` URL and the **ADMIN_KEY**. Click **Save and test**. The header should say *connected*.
-2. Open **Set up a participant laptop**. Enter where the instrument is hosted (its `index.html` address) and the **DEVICE_KEY**. Click **Make the setup link**.
+2. Open **Set up a participant laptop**. Enter where the instrument is hosted (its `index.html` address) and the **DEVICE_KEY**. Click **Make the setup link**. The same two settings make the **educator portal link** that appears with every new session.
 3. Open that link **once on each participant laptop**. It stores the backend address and device key in that laptop's browser and removes them from the address bar.
 
 ## 5. Check it end to end before the first real session
@@ -63,4 +65,5 @@ Open `admin.html`. You can use the copy on the hosted instrument site, or open i
 | Largest single upload | ~30 MB per file (video parts are ~7 MB: 2 minutes at 500 kbit/s) |
 | Apps Script quotas | Consumer accounts: ~90 min of script runtime per day. A 45-minute session with video is about 25 uploads plus ~540 heartbeats, well within it. Workspace accounts have higher limits. |
 | Heartbeat | Every 5 s per running session; the registry sheet is updated at most every 30 s. |
+| Educator portal | Each laptop checks for a portal every 3 s for the first two minutes, then every 8 s (every 15 s once connected). Connecting takes about four small requests. The video never goes through the script. |
 | Offline | Nothing is lost when the network drops. Files wait in the laptop's queue and upload when the instrument page is next open with a connection. |

@@ -264,7 +264,14 @@ function v5Quality() {
   if (overrides.length) flags.push("Framing check overridden " + overrides.length + "×: " + overrides.map(f => f.override || "no reason").join("; "));
   if (STREAMS.writeFailed()) flags.push("Some rows could not be written to this laptop's storage");
   if (S.calibration_attempts > 1) flags.push("Calibration attempts: " + S.calibration_attempts);
+  // v5.1: the child could see their own face on these screens for this long.
+  const pv = (S.preview && S.preview.shown_ms_by_screen) || {};
+  const pvTotal = Object.values(pv).reduce((a, b) => a + b, 0);
+  if (pvTotal > 0) flags.push("Camera preview shown on the child's screen for " + Math.round(pvTotal / 1000) + " s (see preview_shown events)");
+  let remote = null; try { remote = REMOTE.summary(); } catch (e) {}
   return {
+    preview: { mode_changes: (S.preview && S.preview.mode_changes) || [], shown_ms_by_screen: pv, shown_ms_total: Math.round(pvTotal) },
+    educator_portal: Object.assign({ connections: (S.remote && S.remote.connections) || [] }, remote || {}),
     protocol: PROTOCOL, frames: fr, face: fq, per_block_video: perBlock,
     video: { consented: S.video.consented, deleted: S.video.deleted, segments: REC.segments.length, recorder_failures: REC.failures(), camera_lost: CAM.lost(), codec: REC.mime() },
     drift: { checks: S.drift || [], max_deg: drifts.length ? Math.max(...drifts) : null, over_limit: drifts.filter(x => x > PROTOCOL.drift_max_deg).length },

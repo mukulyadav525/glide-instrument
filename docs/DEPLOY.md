@@ -1,17 +1,20 @@
-# Glide instrument `glide-p1-child-v5.0.0` · deployment and operation
+# Glide instrument `glide-p1-child-v5.1.0` · deployment and operation
 
 v5 adds face video on the same clock as everything else, physical screen calibration, a stricter gaze calibration with pre-declared acceptance rules, passive behavioural streams, an **admin console on a second device**, and **upload to Google Drive**. Everything in v4.2 is still there and still works the same way.
+
+**v5.1** adds the optional **educator portal**: a third page on the educator's own device, with the live camera and every question, so the laptop shows the child only the things to compare. It also adds an optional camera preview on the child's screen and a much more reliable gaze calibration. See [EDUCATOR_PORTAL.md](EDUCATOR_PORTAL.md).
 
 ## Bundle
 
 ```
 index.html            the instrument (participant laptop). WebGazer 3.5.3 and both webfonts are embedded.
+educator.html         the educator portal (the educator's phone, tablet or laptop), optional
 admin.html            the admin console (any device: laptop, tablet, phone)
 mediapipe/face_mesh/  WebGazer's face model. Must sit beside index.html, or gaze AND face quality collect nothing.
 DATA_DICTIONARY.csv   one line per column of every exported file (also shipped inside every session folder)
 ```
 
-Storage backend: `source/backend/apps_script/` (Google Drive; see `SETUP_GOOGLE_DRIVE.md` there) or `source/backend/glide_local_server.py` (no internet).
+Storage backend: `backend/apps_script/` (Google Drive; see [SETUP_GOOGLE_DRIVE.md](SETUP_GOOGLE_DRIVE.md)) or `backend/local_server/glide_local_server.py` (no internet).
 
 ## Deploying
 
@@ -19,23 +22,24 @@ The camera only works on **https** or **localhost**. Choose one:
 
 | Option | How |
 |---|---|
-| **Hosted (recommended)** | Publish this folder to any static https host (GitHub Pages, Netlify, the institute web server) so `index.html`, `admin.html` and `mediapipe/` are siblings. Then open `https://<site>/mediapipe/face_mesh/face_mesh.binarypb`: it must return 200. |
+| **Hosted (recommended)** | Publish the repository root to any static https host (GitHub Pages already does this, as do Netlify or the institute web server) so `index.html`, `educator.html`, `admin.html` and `mediapipe/` are siblings. Then open `https://<site>/mediapipe/face_mesh/face_mesh.binarypb`: it must return 200. |
 | **On the laptop** | `python3 -m http.server 8000` in this folder, then open `http://localhost:8000/index.html`. Never open `index.html` as a `file://`: the face model will not load. |
-| **No internet at the school** | `python3 source/backend/glide_local_server.py` on the participant laptop. It serves this folder and stores data in `source/backend/local_drive/GLIDE_Study_Data/`, in the same layout as Drive. The admin device opens `http://<laptop LAN IP>:8765/admin.html`. Copy the folder into the study Drive afterwards. |
+| **No internet at the school** | `python3 backend/local_server/glide_local_server.py --data <a folder outside the repository>` on the participant laptop. It serves the site and stores data in `<that folder>/GLIDE_Study_Data/`, in the same layout as Drive. The admin device opens `http://<laptop LAN IP>:8765/admin.html`. Copy the folder into the study Drive afterwards. |
 
 Use **Chrome or Edge** (current version). Safari and Firefox cannot time individual video frames (`requestVideoFrameCallback`). The instrument tells you so on the camera screen.
 
-## Two devices
+## Two or three devices
 
-| | Admin device | Participant laptop |
-|---|---|---|
-| Opens | `admin.html` | `index.html` |
-| Who uses it | Researcher or special educator | The student, with the special educator beside them |
-| Does | Creates the session (codes, guardian consent per component, consent form version, retention date), shows the join code, watches progress live, sends Message / Stop / Withdraw / Delete video | Runs the study. The right-hand panel is still the educator's, exactly as in v4. |
+| | Admin device | Participant laptop | Educator portal (optional, v5.1) |
+|---|---|---|---|
+| Opens | `admin.html` | `index.html` | `educator.html` (link from the admin console) |
+| Who uses it | Researcher or special educator | The student | The special educator, beside the student |
+| Does | Creates the session (codes, guardian consent per component, consent form version, retention date), shows the join code and portal link, watches progress live, sends Message / Stop / Withdraw / Delete video | Runs the study. Without a portal, the right-hand panel is the educator's, as in v4. With a portal, the whole screen is the child's. | Live camera with framing oval, all questions and buttons, calibration feedback, camera-preview setting |
 
 1. **Admin:** *New session*. Fill in the child code, educator code, consent form version, which components the guardian form agrees to (study, eye tracking, video) and the retention date. Click **Create**. A 6-letter code appears.
 2. **Laptop:** type the code on the first screen and click **Join**. Codes and consent come from the admin device, so they cannot be mistyped here.
-3. The admin card shows the screen, minutes elapsed, recording state and fps, face visibility, gaze accuracy, and uploads.
+3. **Educator's device (optional):** open the portal link shown with the new session. It connects to the laptop by itself; the laptop then shows only the child's view. **Ctrl + Shift + E** on the laptop brings the controls back there at any time.
+4. The admin card shows the screen, minutes elapsed, recording state and fps, face visibility, gaze accuracy, and uploads.
 
 The special educator can be the admin too: create the session on a phone, then sit with the student.
 
@@ -55,11 +59,13 @@ Each screen skips itself when its consent or condition is absent. With no video 
 
 **Recording indicator.** A red *Recording video* badge stays in the top-right corner whenever the camera is recording. If it turns grey (*Camera lost*), the camera was unplugged or taken by another app. The session carries on and the gap is recorded.
 
-**Framing check.** Six dots: face found, centred, distance, both eyes visible, lighting, head level. Aim for green; amber is acceptable. A window **behind** the student is the most common failure: close the blind or turn the table. If it cannot be fixed, type the reason in *Continue anyway* (recorded). The live preview disappears when you leave the screen, on purpose.
+**Framing check.** Six dots: face found, centred, distance, both eyes visible, lighting, head level. Aim for green; amber is acceptable. A window **behind** the student is the most common failure: close the blind or turn the table. If it cannot be fixed, type the reason in *Continue anyway* (recorded). The live preview disappears when you leave the screen, on purpose. With the portal, the oval and the checks stay on the portal all session.
+
+**Camera preview on the child's screen (v5.1).** *Off*, *Only when out of frame* (default) or *Always*. Choose it on the portal, or with the *Camera preview* button in the laptop footer. Every appearance is logged. See [EDUCATOR_PORTAL.md](EDUCATOR_PORTAL.md).
 
 **Card match.** Hold any bank-card-sized card flat on the screen and drag until the striped box matches it. Do not change the browser zoom afterwards.
 
-**Calibration.** One dot at a time, in random order. When the student is looking at it, press the button or the space bar. **Validation** then checks accuracy against the rule fixed before collection (≤ 5° accuracy, ≤ 30% data loss). If the rule is not met you get **at most two recalibrations**; after that eye tracking switches off and the video keeps recording.
+**Calibration.** One dot at a time, in random order, on the whole screen. When the student is looking at it, press the button or the space bar (or switch on *Automatic*). A dot only counts when the camera sees both eyes open; otherwise you are told why and it appears again. At least 7 of 9 dots are needed. **Validation** then checks accuracy against the rule fixed before collection (≤ 5° accuracy, ≤ 30% data loss). If the rule is not met you get **at most two recalibrations**: *Add more calibration dots* (keeps what was learned; usually best) or *Start from scratch* (if the seat, screen or lights changed). After that eye tracking switches off and the video keeps recording. Without a portal the educator panel hides while dots are on screen; **Esc** shows it.
 
 **Drift checks.** One centre dot before each gaze block. If the drift is over 2.5°, recalibrate quickly or carry on; either choice is recorded.
 
@@ -107,4 +113,4 @@ Unchanged from v4.2: every gaze row carries this participant's measured accuracy
 
 ## Protocol conformance
 
-See `source/docs/PROTOCOL_CHANGES_v5.md`. **v5 records face video and uploads to Google Drive, which v4.2 did not.** Both need to be in the approved protocol and on the guardian form before v5 is used with a student.
+See [PROTOCOL_CHANGES_v5.md](PROTOCOL_CHANGES_v5.md). **v5 records face video and uploads to Google Drive, which v4.2 did not.** Both need to be in the approved protocol and on the guardian form before v5 is used with a student.

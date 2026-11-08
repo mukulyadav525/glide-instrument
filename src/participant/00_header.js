@@ -2,10 +2,10 @@
 /* ===========================================================================
    GLIDE, preference-elicitation instrument for students aged 12 and above
    Two paired sessions: CHILD (perceptual choices) + EDUCATOR (everything else)
-   Instrument glide-p1-child-v5.0.0 · Schema 4.0.0
+   Instrument glide-p1-child-v5.1.0 · Schema 4.1.0
    ========================================================================= */
-const INSTRUMENT_VERSION = "glide-p1-child-v5.0.0";
-const SCHEMA_VERSION = "4.0.0";
+const INSTRUMENT_VERSION = "glide-p1-child-v5.1.0";
+const SCHEMA_VERSION = "4.1.0";
 
 /* =========================================================================
    WEBGAZER  -  READ THIS BEFORE DEPLOYING

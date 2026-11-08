@@ -1,52 +1,23 @@
 # Glide instrument v5.0.0 (schema 4.0.0)
 
-> **In the `glide-instrument` repository** this folder is `source/`, and the site that the paths below call `dist/` is the repository root. Build it with `python3 source/build.py --out .`
+> **Historical record of the v5.0 build.** The repository layout has since changed (see the README): sources are in `src/participant/`, `src/admin/` and `src/educator/`, the site is built into the repository root with `python3 tools/build.py`, and the backend is in `backend/apps_script/` and `backend/local_server/`. v5.1 changes are in `CHANGELOG.md` and `docs/EDUCATOR_PORTAL.md`.
 
 The Phase 1 data-collection instrument, rebuilt so that everything collected now can be re-used in Phases 2 and 3 **without asking the same participants again**. Face video, gaze, calibration targets, stimuli and every response share one clock, and everything lands in one structured Google Drive folder per session.
-
-```
-Instrument/
-  dist/                      what gets deployed (built; do not edit by hand)
-    index.html               participant laptop
-    admin.html               admin console (any device)
-    mediapipe/face_mesh/     face model, must sit beside index.html
-    DATA_DICTIONARY.csv      every column of every file
-    DEPLOY.md                operator guide: start here for running sessions
-  src/                       source
-    shell_top.html           page, styles, embedded fonts
-    app/00_header.js         versions
-    webgazer.bundle.js       WebGazer 3.5.3, verbatim
-    app/10_clock_store.js    shared clock, IndexedDB, streams, events
-    app/20_camera.js         camera, recorder, frame clock, face quality, sync flash, protocol thresholds
-    app/30_link.js           admin link, upload outbox, SHA-256, zip
-    app/40_streams_support.js  AOIs, luminance, stimulus snapshots, pointer, hover, focus
-    app/50_instrument.js     the screens (v4.2 plus the v5 screens)
-    app/60_export.js         session lifecycle, export, manifest, withdrawal
-    admin.html               admin console source
-    data_dictionary.json     single source for the data dictionary
-  backend/
-    apps_script/Code.gs      Google Drive backend; SETUP_GOOGLE_DRIVE.md explains the 15-minute setup
-    glide_local_server.py    same API, local folder (testing, or no internet)
-  tests/                     headless end-to-end driver (run.js) and folder verifier (verify.py)
-  docs/PROTOCOL_CHANGES_v5.md  what to update in the IRB protocol and guardian form
-  releases/                  frozen builds (v4.2.0 kept)
-  build.py                   python3 build.py [--release]
-```
 
 ## Build
 
 ```bash
-python3 build.py
+python3 tools/build.py
 ```
 
-`--release` also freezes a copy in `releases/glide-p1-child-v5.0.0.html`. Edit `src/`, never `dist/index.html`.
+`--release` also freezes a copy in `releases/glide-p1-child-v5.0.0.html`. Edit `src/`, never the built pages.
 
 ## Test
 
 Start the local backend (with a scratch data folder):
 
 ```bash
-python3 backend/glide_local_server.py --data /tmp/glide_test
+python3 backend/local_server/glide_local_server.py --data /tmp/glide_test
 ```
 
 Then run the driver (needs `npm install puppeteer-core` in `tests/`). The scenarios are `full`, `withdraw`, `crash`, `educator` and `nocam`:
